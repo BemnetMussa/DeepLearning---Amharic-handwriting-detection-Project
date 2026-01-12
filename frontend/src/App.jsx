@@ -1,64 +1,46 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 
-// Network architecture definition matching AHCNN model
+// Network architecture with actual neuron counts
 const NETWORK_CONFIG = {
   layers: [
-    { name: 'Input', neurons: 1, size: [28, 28], color: '#4f46e5' },
-    { name: 'Block 1', neurons: 32, size: [14, 14], color: '#06b6d4' },
-    { name: 'Block 2', neurons: 64, size: [7, 7], color: '#10b981' },
-    { name: 'Block 3', neurons: 128, size: [3, 3], color: '#f59e0b' },
-    { name: 'Block 4', neurons: 256, size: [3, 3], color: '#ef4444' },
-    { name: 'GAP', neurons: 256, size: [1, 1], color: '#8b5cf6' },
-    { name: 'Output', neurons: 237, size: [1, 1], color: '#ec4899' }
-  ],
-  spacing: 2.5 // Distance between layers
+    { name: 'Input', neurons: 1, color: '#4f46e5', position: 0 },
+    { name: 'Block 1', neurons: 32, color: '#06b6d4', position: 3 },
+    { name: 'Block 2', neurons: 64, color: '#10b981', position: 6 },
+    { name: 'Block 3', neurons: 128, color: '#f59e0b', position: 9 },
+    { name: 'Block 4', neurons: 256, color: '#ef4444', position: 12 },
+    { name: 'GAP', neurons: 256, color: '#8b5cf6', position: 15 },
+    { name: 'Output', neurons: 237, color: '#ec4899', position: 18 }
+  ]
 };
 
 const NetworkVisualizer = () => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
-  const layerMeshesRef = useRef([]);
-  const particlesRef = useRef([]);
+  const cameraRef = useRef(null);
+  const neuronMeshesRef = useRef([]);
+  const connectionLinesRef = useRef([]);
+  const activePathsRef = useRef([]);
   
   const [modelData, setModelData] = useState(null);
   const [isAnimating, setIsAnimating] = useState(false);
-  const [selectedLayer, setSelectedLayer] = useState(null);
+  const mouseRef = useRef({ x: 0, y: 0 });
 
-  // Load prediction data from JSON exported by Streamlit
+  // Load prediction data from Streamlit
   useEffect(() => {
     const loadData = async () => {
-      // ------------------------------------------------------
-      // STRATEGY 1: Check for data injected by Streamlit (Production)
-      // ------------------------------------------------------
-      // In app.py, we added: window.VIS_DATA = { ... }
-      if (window.VIS_DATA) {
-        console.log("🚀 Data loaded directly from Streamlit!");
-        setModelData(window.VIS_DATA);
-        setIsAnimating(true);
-        return; 
-      }
-
-      // ------------------------------------------------------
-      // STRATEGY 2: Fallback to Fetch (Local Development)
-      // ------------------------------------------------------
-      // This runs when you use 'npm run dev' without Streamlit
       try {
-        console.log("📂 Attempting to fetch from file system (Dev Mode)...");
-        const response = await fetch('./data.json');
-        if (!response.ok) throw new Error("File not found");
-        
+        const response = await fetch('/data.json');
         const data = await response.json();
         setModelData(data);
         setIsAnimating(true);
       } catch (error) {
-        console.warn('⚠️ No data found. If in Streamlit, ensure app.py injects window.VIS_DATA.');
+        // Waiting for data
       }
     };
 
-    loadData();
-    
-
+    const interval = setInterval(loadData, 500);
+    return () => clearInterval(interval);
   }, []);
 
   // Initialize Three.js scene
@@ -68,265 +50,265 @@ const NetworkVisualizer = () => {
     // Scene setup
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0e27);
+    scene.fog = new THREE.Fog(0x0a0e27, 20, 50);
     sceneRef.current = scene;
 
-    // Camera setup - positioned for optimal layer view
+    // Camera setup with better angle for 3D view
     const camera = new THREE.PerspectiveCamera(
-      45,
+      60,
       mountRef.current.clientWidth / mountRef.current.clientHeight,
       0.1,
       1000
     );
-    camera.position.set(0, 3, 15);
-    camera.lookAt(0, 0, 0);
+    camera.position.set(10, 8, 25);
+    camera.lookAt(9, 0, 0);
+    cameraRef.current = camera;
 
-    // Renderer with anti-aliasing for smooth edges
+    // Renderer with anti-aliasing
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mountRef.current.appendChild(renderer.domElement);
 
-    // Ambient light for overall scene illumination
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    // Lighting setup
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
 
-    // Directional light for depth perception
-    const directLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directLight.position.set(5, 10, 5);
-    scene.add(directLight);
+    const pointLight1 = new THREE.PointLight(0x4f46e5, 1, 50);
+    pointLight1.position.set(-10, 10, 10);
+    scene.add(pointLight1);
 
-    // Create network layer blocks
-    createNetworkLayers(scene);
+    const pointLight2 = new THREE.PointLight(0x06b6d4, 0.8, 50);
+    pointLight2.position.set(20, 5, 10);
+    scene.add(pointLight2);
+
+    // Build the network
+    buildNeuralNetwork(scene);
+
+    // Mouse interaction for camera control
+    const handleMouseMove = (event) => {
+      mouseRef.current.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouseRef.current.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    };
+    window.addEventListener('mousemove', handleMouseMove);
 
     // Animation loop
     let animationFrame;
     const animate = () => {
       animationFrame = requestAnimationFrame(animate);
-      
-      // Update particles if animating
-      if (isAnimating) {
-        updateParticles();
-      }
 
-      // Subtle rotation for dynamic feel
-      if (layerMeshesRef.current.length > 0) {
-        layerMeshesRef.current.forEach((mesh, i) => {
-          mesh.rotation.y = Math.sin(Date.now() * 0.0003 + i) * 0.05;
-        });
+      // Smooth camera orbit based on mouse
+      const time = Date.now() * 0.0001;
+      camera.position.x = Math.cos(time + mouseRef.current.x * 0.5) * 25 + 9;
+      camera.position.z = Math.sin(time + mouseRef.current.x * 0.5) * 25;
+      camera.position.y = 8 + mouseRef.current.y * 5;
+      camera.lookAt(9, 0, 0);
+
+      // Update active paths animation
+      if (isAnimating) {
+        updateActivePaths();
       }
 
       renderer.render(scene, camera);
     };
     animate();
 
-    // Use ResizeObserver to handle container resizing
-    const resizeObserver = new ResizeObserver(entries => {
-      if (!entries || entries.length === 0) {
-        return;
-      }
-      const { width, height } = entries[0].contentRect;
-      camera.aspect = width / height;
+    // Handle resize
+    const handleResize = () => {
+      if (!mountRef.current) return;
+      camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(width, height);
-    });
-
-    if (mountRef.current) {
-      resizeObserver.observe(mountRef.current);
-    }
+      renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+    };
+    window.addEventListener('resize', handleResize);
 
     // Cleanup
     return () => {
-      resizeObserver.disconnect();
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('mousemove', handleMouseMove);
       cancelAnimationFrame(animationFrame);
       mountRef.current?.removeChild(renderer.domElement);
     };
   }, []);
 
-  // Create visual representation of each layer
-  const createNetworkLayers = (scene) => {
-    const layers = NETWORK_CONFIG.layers;
-    const totalWidth = (layers.length - 1) * NETWORK_CONFIG.spacing;
-    const startX = -totalWidth / 2;
+  // Build complete neural network with individual neurons
+  const buildNeuralNetwork = (scene) => {
+    NETWORK_CONFIG.layers.forEach((layer, layerIdx) => {
+      const neurons = createNeuronLayer(layer, layerIdx);
+      neuronMeshesRef.current.push(neurons);
+      
+      neurons.forEach(neuron => scene.add(neuron));
 
-    layers.forEach((layer, index) => {
-      const x = startX + index * NETWORK_CONFIG.spacing;
-      
-      // Scale block size based on neuron count (logarithmic for better visualization)
-      const scale = 0.3 + Math.log(layer.neurons + 1) * 0.15;
-      
-      // Create layer block geometry
-      const geometry = new THREE.BoxGeometry(scale, scale, scale);
-      const material = new THREE.MeshPhongMaterial({
-        color: layer.color,
-        transparent: true,
-        opacity: 0.7,
-        emissive: layer.color,
-        emissiveIntensity: 0.2
-      });
-      
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(x, 0, 0);
-      mesh.userData = { layer: layer.name, index };
-      
-      // Add wireframe for professional look
-      const wireframe = new THREE.LineSegments(
-        new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.3, transparent: true })
-      );
-      mesh.add(wireframe);
-      
-      scene.add(mesh);
-      layerMeshesRef.current.push(mesh);
-
-      // Draw connections to next layer
-      if (index < layers.length - 1) {
-        createConnections(scene, x, startX + (index + 1) * NETWORK_CONFIG.spacing);
+      // Create connections to next layer
+      if (layerIdx < NETWORK_CONFIG.layers.length - 1) {
+        const nextLayer = NETWORK_CONFIG.layers[layerIdx + 1];
+        createSmartConnections(scene, layer, nextLayer, layerIdx);
       }
 
       // Add layer label
-      createLayerLabel(scene, layer.name, x, -scale - 0.5);
+      createLayerLabel(scene, layer);
     });
   };
 
-  // Create connection lines between adjacent layers
-  const createConnections = (scene, x1, x2) => {
-    const material = new THREE.LineBasicMaterial({
-      color: 0x4f46e5,
-      transparent: true,
-      opacity: 0.15
-    });
+  // Create individual neurons for a layer
+  const createNeuronLayer = (layer, layerIdx) => {
+    const neurons = [];
+    const neuronSize = 0.08;
+    
+    // Calculate grid layout based on neuron count
+    const gridSize = Math.ceil(Math.sqrt(layer.neurons));
+    const spacing = 0.25;
+    const offset = (gridSize - 1) * spacing / 2;
 
-    // Create multiple connection lines for visual richness
-    for (let i = 0; i < 3; i++) {
-      const yOffset = (i - 1) * 0.3;
-      const points = [
-        new THREE.Vector3(x1, yOffset, 0),
-        new THREE.Vector3(x2, yOffset, 0)
-      ];
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const line = new THREE.Line(geometry, material);
-      scene.add(line);
+    for (let i = 0; i < layer.neurons; i++) {
+      const row = Math.floor(i / gridSize);
+      const col = i % gridSize;
+      
+      // Position neurons in a grid
+      const x = layer.position;
+      const y = row * spacing - offset;
+      const z = col * spacing - offset;
+
+      const geometry = new THREE.BoxGeometry(neuronSize, neuronSize, neuronSize);
+      const material = new THREE.MeshPhongMaterial({
+        color: layer.color,
+        transparent: true,
+        opacity: 0.8,
+        emissive: layer.color,
+        emissiveIntensity: 0.2
+      });
+
+      const neuron = new THREE.Mesh(geometry, material);
+      neuron.position.set(x, y, z);
+      neuron.userData = { 
+        layer: layer.name, 
+        layerIdx,
+        neuronIdx: i,
+        baseColor: layer.color,
+        baseEmissive: 0.2
+      };
+
+      neurons.push(neuron);
+    }
+
+    return neurons;
+  };
+
+  // Create smart sampled connections between layers
+  const createSmartConnections = (scene, currentLayer, nextLayer, layerIdx) => {
+    const currentNeurons = neuronMeshesRef.current[layerIdx];
+    const maxConnections = 10000; // Performance limit
+    const totalPossible = currentLayer.neurons * nextLayer.neurons;
+    const samplingRate = Math.min(1, maxConnections / totalPossible);
+
+    // Sample connections intelligently
+    for (let i = 0; i < currentLayer.neurons; i++) {
+      const connectionsPerNeuron = Math.ceil(nextLayer.neurons * samplingRate);
+      
+      for (let j = 0; j < connectionsPerNeuron; j++) {
+        // Sample next layer neurons
+        const targetIdx = Math.floor(Math.random() * nextLayer.neurons);
+        
+        const startPos = currentNeurons[i].position;
+        const endPos = new THREE.Vector3(
+          nextLayer.position,
+          (targetIdx % Math.ceil(Math.sqrt(nextLayer.neurons))) * 0.25 - Math.ceil(Math.sqrt(nextLayer.neurons)) * 0.125,
+          Math.floor(targetIdx / Math.ceil(Math.sqrt(nextLayer.neurons))) * 0.25 - Math.ceil(Math.sqrt(nextLayer.neurons)) * 0.125
+        );
+
+        const points = [startPos, endPos];
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineBasicMaterial({
+          color: 0x4f46e5,
+          transparent: true,
+          opacity: 0.05, // Very subtle by default
+          linewidth: 1
+        });
+
+        const line = new THREE.Line(geometry, material);
+        line.userData = { 
+          layerIdx, 
+          sourceIdx: i, 
+          targetIdx,
+          isActive: false 
+        };
+        
+        scene.add(line);
+        connectionLinesRef.current.push(line);
+      }
     }
   };
 
-  // Create text labels for layers (using sprites)
-  const createLayerLabel = (scene, text, x, y) => {
+  // Create layer labels
+  const createLayerLabel = (scene, layer) => {
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
-    canvas.width = 256;
-    canvas.height = 64;
-    
+    canvas.width = 512;
+    canvas.height = 128;
+
     context.fillStyle = '#ffffff';
-    context.font = 'bold 24px Arial';
+    context.font = 'bold 36px Arial';
     context.textAlign = 'center';
-    context.fillText(text, 128, 40);
-    
+    context.fillText(layer.name, 256, 50);
+    context.font = '24px Arial';
+    context.fillStyle = layer.color;
+    context.fillText(`${layer.neurons} neurons`, 256, 90);
+
     const texture = new THREE.CanvasTexture(canvas);
-    const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+    const material = new THREE.SpriteMaterial({ 
+      map: texture, 
+      transparent: true,
+      opacity: 0.9 
+    });
     const sprite = new THREE.Sprite(material);
-    sprite.position.set(x, y, 0);
-    sprite.scale.set(1.5, 0.4, 1);
+    sprite.position.set(layer.position, -4, 0);
+    sprite.scale.set(2, 0.5, 1);
     scene.add(sprite);
   };
 
-  // Animate data flow particles through network
-  const updateParticles = () => {
-    if (!modelData || particlesRef.current.length === 0) {
-      // Create initial particle batch
-      if (modelData && isAnimating) {
-        createParticleBatch();
-      }
-      return;
-    }
+  // Animate active neural paths during prediction
+  const updateActivePaths = () => {
+    if (!modelData || !modelData.features) return;
 
-    // Update particle positions along their paths
-    particlesRef.current = particlesRef.current.filter(particle => {
-      particle.progress += 0.02;
-      
-      if (particle.progress >= 1) {
-        sceneRef.current.remove(particle.mesh);
-        return false;
-      }
-
-      // Interpolate position between layers
-      const startX = particle.startPos.x;
-      const endX = particle.endPos.x;
-      particle.mesh.position.x = startX + (endX - startX) * particle.progress;
-      
-      // Pulse effect
-      const scale = 0.05 + Math.sin(particle.progress * Math.PI) * 0.03;
-      particle.mesh.scale.set(scale, scale, scale);
-
-      return true;
+    // Reset all neurons to base state
+    neuronMeshesRef.current.forEach(neurons => {
+      neurons.forEach(neuron => {
+        neuron.material.emissiveIntensity = neuron.userData.baseEmissive;
+        neuron.material.opacity = 0.8;
+      });
     });
-  };
 
-  // Create batch of particles to show data flow
-  const createParticleBatch = () => {
-    const layers = NETWORK_CONFIG.layers;
-    const totalWidth = (layers.length - 1) * NETWORK_CONFIG.spacing;
-    const startX = -totalWidth / 2;
+    // Light up neurons based on activation strength
+    modelData.features.forEach((featureMap, layerIdx) => {
+      if (layerIdx + 1 >= neuronMeshesRef.current.length) return;
+      
+      const neurons = neuronMeshesRef.current[layerIdx + 1];
+      const flatFeatures = featureMap.flat(Infinity);
+      
+      flatFeatures.forEach((activation, neuronIdx) => {
+        if (neuronIdx >= neurons.length) return;
+        
+        const intensity = Math.abs(activation);
+        const normalized = Math.min(intensity * 2, 1);
+        
+        neurons[neuronIdx].material.emissiveIntensity = 0.2 + normalized * 0.8;
+        neurons[neuronIdx].material.opacity = 0.8 + normalized * 0.2;
+      });
+    });
 
-    for (let i = 0; i < layers.length - 1; i++) {
-      const x1 = startX + i * NETWORK_CONFIG.spacing;
-      const x2 = startX + (i + 1) * NETWORK_CONFIG.spacing;
-      
-      // Create particle geometry
-      const geometry = new THREE.SphereGeometry(0.05, 16, 16);
-      const material = new THREE.MeshBasicMaterial({
-        color: 0x00d4ff,
-        transparent: true,
-        opacity: 0.9
-      });
-      
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(x1, 0, 0);
-      
-      // Add glow effect
-      const glowGeometry = new THREE.SphereGeometry(0.08, 16, 16);
-      const glowMaterial = new THREE.MeshBasicMaterial({
-        color: 0x00d4ff,
-        transparent: true,
-        opacity: 0.3
-      });
-      const glow = new THREE.Mesh(glowGeometry, glowMaterial);
-      mesh.add(glow);
-      
-      sceneRef.current.add(mesh);
-      
-      particlesRef.current.push({
-        mesh,
-        startPos: new THREE.Vector3(x1, 0, 0),
-        endPos: new THREE.Vector3(x2, 0, 0),
-        progress: 0
-      });
-    }
+    // Pulse effect on connections
+    const pulseTime = Date.now() * 0.002;
+    connectionLinesRef.current.forEach((line, idx) => {
+      if (idx % 5 === 0) { // Pulse only subset for performance
+        line.material.opacity = 0.05 + Math.sin(pulseTime + idx * 0.1) * 0.03;
+      }
+    });
   };
 
   // Trigger animation when new prediction arrives
   useEffect(() => {
     if (modelData && isAnimating) {
-      // Light up layers based on feature activation
-      if (modelData.features && layerMeshesRef.current.length > 0) {
-        modelData.features.forEach((feature, idx) => {
-          if (idx < layerMeshesRef.current.length - 1) {
-            const mesh = layerMeshesRef.current[idx + 1]; // Skip input layer
-            
-            // Calculate average activation strength
-            const avgActivation = feature.flat(2).reduce((a, b) => a + Math.abs(b), 0) / feature.flat(2).length;
-            const intensity = Math.min(avgActivation * 2, 1);
-            
-            // Increase glow based on activation
-            mesh.material.emissiveIntensity = 0.2 + intensity * 0.5;
-          }
-        });
-      }
-
-      // Reset animation after completion
-      setTimeout(() => {
-        setIsAnimating(false);
-        particlesRef.current = [];
-      }, 3000);
+      setTimeout(() => setIsAnimating(false), 5000);
     }
   }, [modelData]);
 
@@ -347,14 +329,15 @@ const NetworkVisualizer = () => {
           position: 'absolute',
           top: '20px',
           right: '20px',
-          background: 'rgba(15, 23, 42, 0.85)',
+          background: 'rgba(15, 23, 42, 0.9)',
           backdropFilter: 'blur(10px)',
           padding: '20px',
           borderRadius: '12px',
           border: '1px solid rgba(79, 70, 229, 0.3)',
           color: 'white',
           fontFamily: 'monospace',
-          minWidth: '200px'
+          minWidth: '200px',
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)'
         }}>
           <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '8px' }}>PREDICTION</div>
           <div style={{ fontSize: '48px', fontWeight: 'bold', color: '#10b981', marginBottom: '12px' }}>
@@ -367,18 +350,36 @@ const NetworkVisualizer = () => {
         </div>
       )}
 
-      {/* Status indicator */}
+      {/* Controls hint */}
       <div style={{
         position: 'absolute',
         bottom: '20px',
         left: '20px',
-        color: 'rgba(255, 255, 255, 0.5)',
+        color: 'rgba(255, 255, 255, 0.4)',
         fontSize: '12px',
         fontFamily: 'monospace'
       }}>
         {!modelData && '● Waiting for prediction...'}
-        {modelData && isAnimating && '● Processing...'}
-        {modelData && !isAnimating && '● Ready'}
+        {modelData && isAnimating && '● Neural pathways active...'}
+        {modelData && !isAnimating && '● Move mouse to rotate view'}
+      </div>
+
+      {/* Network stats */}
+      <div style={{
+        position: 'absolute',
+        top: '20px',
+        left: '20px',
+        background: 'rgba(15, 23, 42, 0.7)',
+        backdropFilter: 'blur(10px)',
+        padding: '12px 16px',
+        borderRadius: '8px',
+        border: '1px solid rgba(79, 70, 229, 0.2)',
+        color: 'white',
+        fontFamily: 'monospace',
+        fontSize: '11px'
+      }}>
+        <div style={{ marginBottom: '4px' }}>Total Neurons: <span style={{ color: '#06b6d4' }}>717</span></div>
+        <div>Connections: <span style={{ color: '#10b981' }}>~10,000</span></div>
       </div>
     </div>
   );
