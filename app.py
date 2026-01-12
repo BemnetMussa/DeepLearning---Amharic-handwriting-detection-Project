@@ -1,387 +1,597 @@
 import streamlit as st
-import torch
-import numpy as np
 import cv2
-from PIL import Image
+import numpy as np
 from streamlit_drawable_canvas import st_canvas
-from torchvision import transforms
-import math
+import json
+import base64
+import torch
+import os
+import re # Added for regex operations
+import traceback
+import uuid
 
-# Try importing the model, provide a warning if file is missing (for UI testing)
-try:
-    from model import AHCNN
-    MODEL_AVAILABLE = True
-except ImportError:
-    MODEL_AVAILABLE = False
+# Import your model components
+from src.config import PAGE_CONFIG, CANVAS_SIZE
+from src.inference import Predictor
 
-# --- Configuration ---
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
 st.set_page_config(
-    page_title="Amharic AI Explorer",
-    page_icon="🇪🇹",
+    page_title="Amharic Character Recognition - Neural Network Visualizer",
+    page_icon="🧠",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# --- Constants & Styling ---
-MODEL_PATH = "amharic_ocr_v2_85acc2.pth"
-CANVAS_SIZE = 300
-
-# Modern Color Palette
-COLORS = {
-    "bg": "#000000",        # Pure Black
-    "card": "#12161e",      # Slate 800
-    "text": "#ffffff",      # Slate 50
-    "accent": "#6366f1",    # Indigo 500
-    "success": "#22c55e",   # Green 500
-    "secondary": "#94a3b8"  # Slate 400
-}
-
-# --- Custom CSS ---
-st.markdown(f"""
-    <style>
-        /* --- Canvas Toolbar Buttons --- */
-        div[data-testid="stDrawableCanvas"] button {{
-            background-color: #eee; /* Light gray background */
-            color: #333; /* Dark text/icon color */
-            border: 2px solid #ccc;
-            border-radius: 4px;
-            margin: 2px;
-            padding: 5px;
-            box-shadow: none;
-            transition: all 0.2s ease;
-        }}
-        div[data-testid="stDrawableCanvas"] button:hover {{
-            background-color: #ddd;
-            border-color: #bbb;
-            transform: translateY(-1px);
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-        }}
-        div[data-testid="stDrawableCanvas"] button svg {{
-            fill: #333 !important; /* For SVG icons, force color override */
-        }}
-        
-        /* Global Reset */
-        .stApp {{
-            background-color: {COLORS['bg']};
-            color: {COLORS['text']};
-            font-family: 'Inter', sans-serif;
-        }}
-        
-        /* Headers */
-        h1, h2, h3 {{
-            color: {COLORS['text']} !important;
-            font-weight: 700;
-        }}
-        h1 {{ margin-bottom: 0.5rem; }}
-        
-        /* Cards */
-        .css-1r6slb0, .stMarkdown, .stButton {{
-             color: {COLORS['text']};
-        }}
-        
-        div.stButton > button {{
-            background: linear-gradient(135deg, {COLORS['accent']} 0%, #4f46e5 100%);
-            color: white;
-            border: none;
-            padding: 0.6rem 1.2rem;
-            border-radius: 8px;
-            font-weight: 600;
-            width: 100%;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 6px -1px rgba(99, 102, 241, 0.4);
-        }}
-        div.stButton > button:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.5);
-        }}
-
-        /* Custom Card Container */
-        .glass-card {{
-            background-color: {COLORS['card']};
-            border: 1px solid #334155;
-            padding: 1.5rem;
-            border-radius: 12px;
-            margin-bottom: 1.5rem;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        }}
-        
-        /* Metrics */
-        div[data-testid="stMetricValue"] {{
-            font-size: 3rem;
-            color: {COLORS['accent']};
-            text-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
-        }}
-        
-        /* Tabs */
-        .stTabs [data-baseweb="tab-list"] {{
-            gap: 8px;
-            background-color: transparent;
-        }}
-        .stTabs [data-baseweb="tab"] {{
-            background-color: #0f172a;
-            border-radius: 6px;
-            color: {COLORS['secondary']};
-            border: 1px solid #334155;
-        }}
-        .stTabs [data-baseweb="tab"][aria-selected="true"] {{
-            background-color: {COLORS['accent']};
-            color: white;
-            border: none;
-        }}
-    </style>
+# ============================================================================
+# CUSTOM CSS - MINIMAL & PROFESSIONAL
+# ============================================================================
+st.markdown("""
+<style>
+    /* Remove default padding */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 0rem;
+    }
+    
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Custom glass card effect */
+    .glass-card {
+        background: rgba(15, 23, 42, 0.6);
+        backdrop-filter: blur(10px);
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 1.5rem;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    }
+    
+    /* Button styling */
+    .stButton > button {
+        width: 100%;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        padding: 0.75rem 1.5rem;
+        font-weight: 600;
+        font-size: 16px;
+        transition: all 0.3s ease;
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+    }
+    
+    /* Header styling */
+    h1 {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800;
+        margin-bottom: 0.5rem;
+    }
+    
+    /* Hide canvas toolbar for cleaner look */
+    .stDrawableCanvas {
+        border-radius: 12px;
+        overflow: hidden;
+    }
+</style>
 """, unsafe_allow_html=True)
 
-# --- Helpers ---
-def make_grid_image(feature_maps, cols=8):
-    """
-    Stitches feature maps into a single image.
-    Fixed to handle NumPy array truth value ambiguity.
-    """
-    # --- FIX: Robust check for empty input ---
-    if feature_maps is None:
-        return None
-    if isinstance(feature_maps, np.ndarray) and feature_maps.size == 0:
-        return None
-    if isinstance(feature_maps, list) and len(feature_maps) == 0:
-        return None
-    # ----------------------------------------
-
-    # Normalize features to 0-255 uint8
-    maps = []
-    # If it's a 3D array (Channels, Height, Width), iterate through channels
-    for fmap in feature_maps:
-        # If fmap is 3D (1, H, W), squeeze it. If 2D (H, W), leave it.
-        fmap = fmap.squeeze()
-        
-        if fmap.max() - fmap.min() > 0:
-            norm = (fmap - fmap.min()) / (fmap.max() - fmap.min())
-            norm = (norm * 255).astype(np.uint8)
-        else:
-            norm = np.zeros_like(fmap, dtype=np.uint8)
-        
-        # Resize small feature maps up for visibility
-        if norm.shape[0] < 28: 
-            norm = cv2.resize(norm, (56, 56), interpolation=cv2.INTER_NEAREST)
-        
-        maps.append(norm)
-
-    n_maps = len(maps)
-    rows = math.ceil(n_maps / cols)
-    
-    # Get dimensions of one map
-    h, w = maps[0].shape
-    
-    # Create empty grid
-    grid_h = rows * h
-    grid_w = cols * w
-    grid_img = np.zeros((grid_h, grid_w), dtype=np.uint8)
-    
-    for idx, img in enumerate(maps):
-        r = idx // cols
-        c = idx % cols
-        grid_img[r*h:(r+1)*h, c*w:(c+1)*w] = img
-        
-    return grid_img
-
-# --- Model Logic ---
-visualized_features = []
-def feature_hook(module, input, output):
-    visualized_features.append(output)
-
+# ============================================================================
+# MODEL INITIALIZATION
+# ============================================================================
 @st.cache_resource
-def load_predictor():
-    if not MODEL_AVAILABLE:
-        return None
+def load_model():
+    """Load PyTorch model once and cache it"""
+    return Predictor("assets/amharic_ocr_v2.pth")
+
+predictor = load_model()
+
+# ============================================================================
+# HEADER
+# ============================================================================
+st.markdown("# 🧠 Neural Network Visualizer")
+st.markdown("**Amharic Character Recognition** - See how the model thinks")
+st.markdown("---")
+
+# ============================================================================
+# LAYOUT: DRAWING CANVAS (LEFT) | VISUALIZATION (RIGHT)
+# ============================================================================
+col_canvas, col_visualization = st.columns([0.35, 0.65], gap="large")
+
+# ----------------------------------------------------------------------------
+# LEFT COLUMN: DRAWING INTERFACE
+# ----------------------------------------------------------------------------
+with col_canvas:
+    st.markdown("### ✍️ Draw Character")
+    st.caption("Draw any Amharic character to see the neural network in action")
     
-    class AmharicPredictor:
-        def __init__(self, model_path):
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            try:
-                checkpoint = torch.load(model_path, map_location=self.device)
-                self.model = AHCNN(num_classes=len(checkpoint['class_to_idx'])).to(self.device)
-                self.model.load_state_dict(checkpoint['model_state_dict'])
-                self.model.eval()
-                self.class_to_idx = checkpoint['class_to_idx']
-                self.idx_to_class = {v: k for k, v in self.class_to_idx.items()}
-
-                # Register hooks
-                self.model.block1.register_forward_hook(feature_hook)
-                self.model.block2.register_forward_hook(feature_hook)
-                self.model.block3.register_forward_hook(feature_hook)
-                self.model.block4.register_forward_hook(feature_hook)
-
-                self.transform = transforms.Compose([
-                    transforms.Resize((28, 28)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.239], std=[0.407]) 
-                ])
-            except Exception as e:
-                st.error(f"Error loading model: {e}")
-
-        def predict(self, img_array):
-            global visualized_features
-            visualized_features = [] # Reset
-
-            img = Image.fromarray(img_array.astype('uint8'), 'L')
-            img_tensor = self.transform(img).unsqueeze(0).to(self.device)
-
-            with torch.no_grad():
-                output = self.model(img_tensor)
-                probabilities = torch.nn.functional.softmax(output, dim=1)
-                confidence, predicted_idx = torch.max(probabilities, 1)
-                pred_class = self.idx_to_class[predicted_idx.item()]
-                confidence_score = confidence.item()
-
-            return pred_class, confidence_score, visualized_features, img_tensor
-
-    return AmharicPredictor(MODEL_PATH)
-
-predictor = load_predictor()
-
-# --- Initialize Session State ---
-if 'prediction' not in st.session_state:
-    st.session_state.prediction = None
-    st.session_state.confidence = 0.0
-    st.session_state.features = []
-
-# --- Sidebar ---
-with st.sidebar:
-    st.image("https://commons.wikimedia.org/wiki/File:Flag_of_Ethiopia.svg#/media/File:Flag_of_Ethiopia.svg", width=50)
-    st.title("Settings")
+    # Drawing canvas - black background, white stroke
+    canvas_result = st_canvas(
+        fill_color="rgba(0, 0, 0, 1)",
+        stroke_width=25,
+        stroke_color="#FFFFFF",
+        background_color="#000000",
+        height=CANVAS_SIZE,
+        width=CANVAS_SIZE,
+        drawing_mode="freedraw",
+        key="canvas",
+        display_toolbar=False  # Clean interface
+    )
     
-    stroke_width = st.slider("Pen Thickness", 10, 30, 20)
+    # Action buttons in columns
+    btn_col1, btn_col2 = st.columns(2)
     
-    st.markdown("---")
-    st.markdown("### About")
-    st.markdown("""
-    **Amharic OCR X-Ray** demonstrates how a Convolutional Neural Network (CNN) sees Ethiopian characters.
+    with btn_col1:
+        predict_btn = st.button("🚀 PREDICT", use_container_width=True)
     
-    1. **Draw** a character.
-    2. **Click** Analyze.
-    3. **Explore** the layers to see features extracted by the AI.
-    """)
+    with btn_col2:
+        if st.button("🗑️ CLEAR", use_container_width=True):
+            st.session_state.canvas_key = str(uuid.uuid4())
+            st.session_state.prediction_data = None # Reset visualization
+            st.rerun()
     
-    if st.button("Reset Application"):
-        st.session_state.prediction = None
-        st.rerun()
-
-# --- Main Content ---
-st.markdown("<h1 style='text-align: center;'>🇪🇹 Amharic Character Recognition</h1>", unsafe_allow_html=True)
-st.markdown(f"<p style='text-align: center; color: {COLORS['secondary']};'>Deep Learning Model Transparency Demo</p>", unsafe_allow_html=True)
-st.write("") 
-
-col_input, col_viz = st.columns([1, 1.5], gap="large")
-
-# --- Left Column: Input & Prediction ---
-with col_input:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("Draw Character")
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    # Canvas Center Wrapper
-    c_col1, c_col2, c_col3 = st.columns([1, 10, 1])
-    with c_col2:
-        canvas_result = st_canvas(
-            fill_color="black",
-            stroke_width=stroke_width,
-            stroke_color="#FFFFFF",
-            background_color="#000000",
-            height=CANVAS_SIZE,
-            width=CANVAS_SIZE,
-            drawing_mode="freedraw",
-            key="canvas",
-            display_toolbar=True
-        )
+    # Process prediction when button clicked
+    if predict_btn:
+        if canvas_result.image_data is not None:
+            # Check if canvas has content
+            if np.sum(canvas_result.image_data) > 0:
+                
+                with st.spinner("Analyzing..."):
+                    # Run model prediction with feature extraction
+                    label, confidence, heatmap, raw_img, all_probabilities = predictor.predict_with_heatmap(
+                        canvas_result.image_data
+                    )
+                    
+                    # Store in session state
+                    st.session_state.prediction = label
+                    st.session_state.confidence = confidence
+                    st.session_state.heatmap = heatmap
+                    st.session_state.raw_img = raw_img
+                    st.session_state.features = predictor.features
+                    st.session_state.all_probabilities = all_probabilities
+                    
+                    # ============================================================
+                    # EXPORT DATA FOR REACT VISUALIZATION
+                    # ============================================================
+                    
+                    # Convert feature tensors to nested lists for JSON
+                    features_list = []
+                    for feature_tensor in st.session_state.features:
+                        # Convert to numpy and then to list
+                        features_list.append(
+                            feature_tensor.detach().cpu().numpy().tolist()
+                        )
+                    
+                    # Convert raw image to base64 for visualization
+                    _, buffer = cv2.imencode('.png', st.session_state.raw_img)
+                    img_base64 = base64.b64encode(buffer).decode('utf-8')
+                    
+                    # Prepare JSON payload
+                    visualization_data = {
+                        "prediction": st.session_state.prediction,
+                        "confidence": float(st.session_state.confidence),
+                        "features": features_list,
+                        "raw_img_b64": f"data:image/png;base64,{img_base64}",
+                        "all_probabilities": st.session_state.all_probabilities,
+                        "idx_to_class": predictor.idx_to_class
+                    }
+                    
+                    try:
+                        os.makedirs("assets/frontend", exist_ok=True)
+                        with open("assets/frontend/data.json", "w", encoding="utf-8") as f:
+                            json.dump(visualization_data, f, ensure_ascii=False)
+                    except Exception as e:
+                        # Write full traceback to a debug log for inspection
+                        try:
+                            os.makedirs("assets/frontend", exist_ok=True)
+                            with open("assets/frontend/debug.log", "a", encoding="utf-8") as logf:
+                                logf.write(traceback.format_exc() + "\n")
+                        except Exception:
+                            # If even logging fails, fallback to printing to Streamlit
+                            st.error("Critical: failed to write debug log")
+                        st.error("Failed to save visualization data. See assets/frontend/debug.log for details.")
+                        st.exception(e)
 
-    st.write("")
-    if st.button("Identify" \
-    " Character", use_container_width=True):
-        if canvas_result.image_data is not None and predictor:
-            try:
-                img_gray = cv2.cvtColor(canvas_result.image_data, cv2.COLOR_RGBA2GRAY)
-                # Check if canvas is empty
-                if np.sum(img_gray) == 0:
-                    st.warning("Please draw something first!")
-                else:
-                    pred_class, conf, feats, raw_tensor = predictor.predict(img_gray)
-                    st.session_state.prediction = pred_class
-                    st.session_state.confidence = conf
-                    st.session_state.features = feats
-                    st.session_state.debug_input = raw_tensor
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Prediction error: {e}")
-        elif not predictor:
-            st.error("Model not loaded.")
+                    
+                    st.success("✅ Prediction complete!")
+                    st.rerun()  # Refresh to show results
+            else:
+                st.warning("⚠️ Please draw a character first")
+        else:
+            st.warning("⚠️ Canvas not initialized")
+    
 
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    # Result Display (Only if prediction exists)
-    if st.session_state.prediction:
-        st.markdown('<div class="glass-card" style="border-color: #6366f1;">', unsafe_allow_html=True)
-        r_col1, r_col2 = st.columns([1, 1])
-        
-        with r_col1:
-            st.markdown("<p style='font-size:0.9rem; color:#94a3b8; margin-bottom:0;'>PREDICTION</p>", unsafe_allow_html=True)
-            st.markdown(f"<p style='font-size:4.5rem; font-weight:800; line-height:1; color:{COLORS['success']}; margin:0;'>{st.session_state.prediction}</p>", unsafe_allow_html=True)
-        
-        with r_col2:
-            st.markdown("<p style='font-size:0.9rem; color:#94a3b8; margin-bottom:0;'>CONFIDENCE</p>", unsafe_allow_html=True)
-            st.metric(label="", value=f"{st.session_state.confidence:.1%}", delta_color="off")
+# ----------------------------------------------------------------------------
+# RIGHT COLUMN: NEURAL NETWORK VISUALIZATION
+# ----------------------------------------------------------------------------
+# ... inside app.py ...
+
+with col_visualization:
+    st.markdown("### 🔮 Neural Network Architecture")
+    st.caption("Real-time visualization of how the model processes your drawing")
+    
+    # Check if visualization is ready
+    if 'prediction' in st.session_state:
+        try:
+            frontend_path = "assets/frontend"
+            assets_dir = os.path.join(frontend_path, "assets")
             
-        # Confidence Bar
-        st.progress(st.session_state.confidence)
-        
-        with st.expander("Debug View: Model Input"):
-            if 'debug_input' in st.session_state:
-                norm_input = st.session_state.debug_input.squeeze().cpu().numpy()
-                norm_input = (norm_input - norm_input.min()) / (norm_input.max() - norm_input.min())
-                st.image(norm_input, caption="28x28 Preprocessed Tensor", width=100)
+            # 1. ROBUSTLY FIND JS AND CSS FILES
+            # Instead of regexing the HTML, let's just grab the files from the directory
+            js_file = None
+            css_file = None
+            
+            if os.path.exists(assets_dir):
+                for f in os.listdir(assets_dir):
+                    if f.endswith(".js"):
+                        js_file = f
+                    elif f.endswith(".css"):
+                        css_file = f
+            
+            if not js_file or not css_file:
+                st.error("❌ Could not locate .js or .css files in assets/frontend/assets/")
+            else:
+                # 2. READ CONTENT
+                with open(os.path.join(assets_dir, js_file), "r", encoding="utf-8") as f:
+                    js_content = f.read()
                 
-        st.markdown('</div>', unsafe_allow_html=True)
+                with open(os.path.join(assets_dir, css_file), "r", encoding="utf-8") as f:
+                    css_content = f.read()
 
-# --- Right Column: X-Ray Visualization ---
-with col_viz:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader(" Model X-Ray")
-    st.write("Visualize how the neural network breaks down the image layer by layer.")
+                # 3. PREPARE DATA FOR INJECTION
+                # We inject the data directly into the HTML so React doesn't need to fetch it
+                # We duplicate the logic from the predict button here or just load the saved json
+                try:
+                    with open("assets/frontend/data.json", "r", encoding="utf-8") as f:
+                        data_json = f.read()
+                except:
+                    data_json = "{}" # Fallback
 
-    if st.session_state.features:
-        # Create tabs
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "Layer 1 (Edges)", 
-            "Layer 2 (Curves)", 
-            "Layer 3 (Parts)", 
-            "Layer 4 (Abstract)"
-        ])
-        
-        layers_info = [
-            (tab1, 0, "Initial Edge Detection", 8),
-            (tab2, 1, "Shape & Curve Aggregation", 8),
-            (tab3, 2, "Complex Pattern Recognition", 12),
-            (tab4, 3, "High-Level Abstract Features", 16)
-        ]
+                # 4. CONSTRUCT SELF-CONTAINED HTML
+                # Note: We assign data to window.VIS_DATA so React can see it immediately
+                html_content = f"""
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8" />
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                    <title>Neural Viz</title>
+                    <style>
+                        /* Essential reset for Streamlit iframe */
+                        body {{ margin: 0; padding: 0; overflow: hidden; background-color: transparent; }}
+                        {css_content}
+                    </style>
+                </head>
+                <body>
+                    <div id="root"></div>
+                    
+                    <script>
+                        // INJECT DATA DIRECTLY
+                        window.VIS_DATA = {data_json};
+                        console.log("Data injected into window.VIS_DATA");
+                    </script>
+                    
+                    <script type="module">
+                        {js_content}
+                    </script>
+                </body>
+                </html>
+                """
 
-        for tab_obj, layer_idx, desc, grid_cols in layers_info:
-            with tab_obj:
-                st.caption(f"ℹ️ {desc} - {st.session_state.features[layer_idx].shape[1]} Feature Maps")
-                
-                # Convert raw tensor features to numpy
-                feats = st.session_state.features[layer_idx].squeeze(0).cpu().numpy()
-                
-                # Create the mosaic grid
-                grid_viz = make_grid_image(feats, cols=grid_cols)
-                
-                # Display with a nice border
-                st.image(grid_viz, use_container_width=True, output_format='PNG')
-                st.markdown(f"<p style='text-align:center; font-size:0.8rem; color:{COLORS['secondary']}'>Brighter pixels = Higher activation</p>", unsafe_allow_html=True)
+                # 5. RENDER
+                st.components.v1.html(html_content, height=700, scrolling=False)
 
+        except Exception as e:
+            st.error(f"Error loading visualization: {str(e)}")
+            st.write(traceback.format_exc())
     else:
-        # Empty State Placeholder
+        # Placeholder (Same as your original code)
         st.markdown(f"""
-            <div style="border: 2px dashed {COLORS['card']}; border-radius: 8px; padding: 3rem; text-align: center; color: {COLORS['secondary']};">
-                <p>Waiting for input...</p>
-                <p style="font-size: 0.8rem;">Draw a character on the left and click 'Identify' to see the internal activations.</p>
+        <div style='height: 700px; display: flex; align-items: center; justify-content: center; 
+                    background: linear-gradient(135deg, #0a0e27 0%, #1a1d2e 100%); 
+                    border-radius: 16px; border: 1px solid rgba(255, 255, 255, 0.1);'>
+            <div style='text-align: center; color: rgba(255, 255, 255, 0.5);'>
+                <div style='font-size: 48px; margin-bottom: 16px;'>🧠</div>
+                <div style='font-size: 18px; font-weight: 600; margin-bottom: 8px;'>Neural Network Ready</div>
+                <div style='font-size: 14px;'>Draw a character and click PREDICT</div>
             </div>
+        </div>
         """, unsafe_allow_html=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
+# ============================================================================
+# FOOTER INFO
+# ============================================================================
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; opacity: 0.5; font-size: 12px; padding: 1rem;'>
+    <strong>Model:</strong> AHCNN (89% accuracy) | <strong>Classes:</strong> 237 Amharic characters | <strong>Architecture:</strong> 4 Conv Blocks + GAP + FC
+</div>
+""", unsafe_allow_html=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# import streamlit as st
+# import cv2
+# import numpy as np
+# from streamlit_drawable_canvas import st_canvas
+# import json
+# import base64
+# import os
+# import traceback
+# import uuid  # Used for generating unique keys
+
+# # Import your model components
+# from src.config import PAGE_CONFIG, CANVAS_SIZE
+# from src.inference import Predictor
+
+# # ============================================================================
+# # 1. PAGE CONFIGURATION & CSS
+# # ============================================================================
+# st.set_page_config(
+#     page_title="Amharic Character Recognition - Neural Network Visualizer",
+#     page_icon="🧠",
+#     layout="wide",
+#     initial_sidebar_state="expanded" 
+# )
+
+
+# # ============================================================================
+# # CUSTOM CSS - MINIMAL & PROFESSIONAL
+# # ============================================================================
+# st.markdown("""
+# <style>
+#     /* Remove default padding */
+#     .block-container {
+#         padding-top: 2rem;
+#         padding-bottom: 0rem;
+#     }
+    
+#     /* Hide Streamlit branding */
+#     #MainMenu {visibility: hidden;}
+#     footer {visibility: hidden;}    
+#     header {visibility: hidden;}
+    
+#     /* Custom glass card effect */
+#     .glass-card {
+#         background: rgba(15, 23, 42, 0.6);
+#         backdrop-filter: blur(10px);
+#         border-radius: 16px;
+#         border: 1px solid rgba(255, 255, 255, 0.1);
+#         padding: 1.5rem;
+#         box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+#     }
+    
+#     /* Button styling */
+#     .stButton > button {
+#         width: 100%;
+#         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+#         color: white;
+#         border: none;
+#         border-radius: 12px;
+#         padding: 0.75rem 1.5rem;
+#         font-weight: 600;
+#         font-size: 16px;
+#         transition: all 0.3s ease;
+#     }
+    
+#     .stButton > button:hover {
+#         transform: translateY(-2px);
+#         box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+#     }
+    
+#     /* Header styling */
+#     h1 {
+#         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+#         -webkit-background-clip: text;
+#         -webkit-text-fill-color: transparent;
+#         font-weight: 800;
+#         margin-bottom: 0.5rem;
+#     }
+    
+#     /* Hide canvas toolbar for cleaner look */
+#     .stDrawableCanvas {
+#         border-radius: 12px;
+#         overflow: hidden;
+#     }
+# </style>
+# """, unsafe_allow_html=True)
+# # ============================================================================
+# # 2. STATE MANAGEMENT & MODEL LOADING
+# # ============================================================================
+# @st.cache_resource
+# def load_model():
+#     return Predictor("assets/amharic_ocr_v2.pth")
+
+# try:
+#     predictor = load_model()
+# except Exception as e:
+#     st.error(f"Model could not load: {e}")
+#     st.stop()
+
+# # Initialize Session State
+# if 'canvas_key' not in st.session_state:
+#     st.session_state.canvas_key = "canvas_init"
+# if 'prediction_data' not in st.session_state:
+#     st.session_state.prediction_data = None # Holds the JSON for the frontend
+
+# # ============================================================================
+# # 3. SIDEBAR (CONTROLS)
+# # ============================================================================
+# with st.sidebar:
+#     # HEADER
+#     st.markdown("# 🧠 Neural Network Visualizer")
+#     st.markdown("**Amharic Character Recognition** - See how the model thinks")
+#     st.markdown("---")
+
+#     # --- DRAWING CANVAS ---
+#     # We use a container to style the border
+#     col_canvas, col_visualization = st.columns([0.35, 0.65], gap="large")
+#     st.markdown('<div class="canvas-container">', unsafe_allow_html=True)
+    
+
+#     # Drawing canvas - black background, white stroke
+#     canvas_result = st_canvas(
+#         fill_color="rgba(0, 0, 0, 1)",
+#         stroke_width=25,
+#         stroke_color="#FFFFFF",
+#         background_color="#000000",
+#         height=CANVAS_SIZE,
+#         width=CANVAS_SIZE,
+#         drawing_mode="freedraw",
+#         key=st.session_state.canvas_key,
+#         display_toolbar=False  # Clean interface
+#     )
+#     st.markdown('</div>', unsafe_allow_html=True)
+    
+#     # --- BUTTONS ---
+#     col_pred, col_clear = st.columns([1, 1])
+    
+#     with col_pred:
+#         predict_btn = st.button("🚀 PREDICT", use_container_width=True)
+        
+#     with col_clear:
+#         clear_btn = st.button("🗑️ CLEAR", use_container_width=True)
+
+# # ============================================================================
+# # 4. LOGIC HANDLERS
+# # ============================================================================
+
+# # HANDLE CLEAR
+# if clear_btn:
+#     # To clear the canvas, we must change its KEY. This forces a re-render.
+#     st.session_state.canvas_key = str(uuid.uuid4())
+#     st.session_state.prediction_data = None # Reset visualization
+#     st.rerun()
+
+# # HANDLE PREDICT
+# if predict_btn and canvas_result.image_data is not None:
+#     if np.sum(canvas_result.image_data) > 0:
+#         with st.spinner("Processing..."):
+#             # 1. Inference
+#             label, confidence, _, raw_img, all_probs = predictor.predict_with_heatmap(
+#                 canvas_result.image_data
+#             )
+            
+#             # 2. Process Features for JSON
+#             features_list = [f.detach().cpu().numpy().tolist() for f in predictor.features]
+            
+#             # 3. Process Image
+#             _, buffer = cv2.imencode('.png', raw_img)
+#             img_base64 = base64.b64encode(buffer).decode('utf-8')
+            
+#             # 4. Construct Data Payload
+#             visualization_data = {
+#                 "prediction": label,
+#                 "confidence": float(confidence),
+#                 "features": features_list,
+#                 "raw_img_b64": f"data:image/png;base64,{img_base64}",
+#                 "all_probabilities": all_probs,
+#                 "idx_to_class": predictor.idx_to_class
+#             }
+            
+#             # 5. Save to Session State (So it persists during reruns)
+#             st.session_state.prediction_data = visualization_data
+            
+#             # Optional: Save to file for debugging
+#             try:
+#                 os.makedirs("assets/frontend", exist_ok=True)
+#                 with open("assets/frontend/data.json", "w", encoding="utf-8") as f:
+#                     json.dump(visualization_data, f, ensure_ascii=False)
+#             except:
+#                 pass
+            
+#             st.rerun()
+#     else:
+#         st.sidebar.warning("⚠️ Canvas is empty")
+
+# # ============================================================================
+# # 5. MAIN AREA - VISUALIZATION (ALWAYS VISIBLE)
+# # ============================================================================
+
+# # Prepare the data variable for Injection
+# if st.session_state.prediction_data:
+#     # If we have a prediction, inject it
+#     data_json_string = json.dumps(st.session_state.prediction_data)
+# else:
+#     # If no prediction yet, inject null. The React app should handle null by showing the idle network.
+#     data_json_string = "null"
+
+# # Load Frontend Files
+# try:
+#     frontend_path = "assets/frontend"
+#     assets_dir = os.path.join(frontend_path, "assets")
+    
+#     js_file = next((f for f in os.listdir(assets_dir) if f.endswith(".js")), None)
+#     css_file = next((f for f in os.listdir(assets_dir) if f.endswith(".css")), None)
+    
+#     if js_file and css_file:
+#         with open(os.path.join(assets_dir, js_file), "r", encoding="utf-8") as f:
+#             js_content = f.read()
+#         with open(os.path.join(assets_dir, css_file), "r", encoding="utf-8") as f:
+#             css_content = f.read()
+
+#         html_content = f"""
+#         <!DOCTYPE html>
+#         <html lang="en">
+#         <head>
+#             <meta charset="UTF-8" />
+#             <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+#             <title>Neural Viz</title>
+#             <style>
+#                 body {{ margin: 0; padding: 0; overflow: hidden; background-color: transparent; }}
+#                 /* Force React Root to fill screen */
+#                 #root {{ width: 100vw; height: 100vh; }}
+#                 {css_content}
+#             </style>
+#         </head>
+#         <body>
+#             <div id="root"></div>
+#             <script>
+#                 // INJECT DATA (Or Null)
+#                 window.VIS_DATA = {data_json_string};
+#             </script>
+#             <script type="module">
+#                 {js_content}
+#             </script>
+#         </body>
+#         </html>
+#         """
+        
+#         # Calculate height to fill screen roughly (minus header padding)
+#         st.components.v1.html(html_content, height=850, scrolling=False)
+        
+#     else:
+#         st.error("Frontend build files not found. Run 'npm run build' in frontend folder.")
+
+# except Exception as e:
+#     st.error(f"Error loading frontend: {e}")
