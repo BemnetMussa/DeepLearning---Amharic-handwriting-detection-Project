@@ -20,11 +20,10 @@ const NetworkVisualizer = () => {
   const cameraRef = useRef(null);
   const neuronMeshesRef = useRef([]);
   const connectionLinesRef = useRef([]);
-  const activePathsRef = useRef([]);
+  const animationStateRef = useRef({ stage: 0, progress: 0, isComplete: false });
   
   const [modelData, setModelData] = useState(null);
-  const [isAnimating, setIsAnimating] = useState(false);
-  const mouseRef = useRef({ x: 0, y: 0 });
+  const [animationStage, setAnimationStage] = useState('waiting'); // waiting, animating, complete
 
   // Load prediction data from Streamlit
   useEffect(() => {
@@ -32,8 +31,13 @@ const NetworkVisualizer = () => {
       try {
         const response = await fetch('/data.json');
         const data = await response.json();
-        setModelData(data);
-        setIsAnimating(true);
+        
+        // Only trigger new animation if data changed
+        if (JSON.stringify(data) !== JSON.stringify(modelData)) {
+          setModelData(data);
+          setAnimationStage('animating');
+          animationStateRef.current = { stage: 0, progress: 0, isComplete: false };
+        }
       } catch (error) {
         // Waiting for data
       }
@@ -41,7 +45,7 @@ const NetworkVisualizer = () => {
 
     const interval = setInterval(loadData, 500);
     return () => clearInterval(interval);
-  }, []);
+  }, [modelData]);
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -53,7 +57,7 @@ const NetworkVisualizer = () => {
     scene.fog = new THREE.Fog(0x0a0e27, 20, 50);
     sceneRef.current = scene;
 
-    // Camera setup with better angle for 3D view
+    // Camera setup
     const camera = new THREE.PerspectiveCamera(
       60,
       mountRef.current.clientWidth / mountRef.current.clientHeight,
@@ -64,14 +68,14 @@ const NetworkVisualizer = () => {
     camera.lookAt(9, 0, 0);
     cameraRef.current = camera;
 
-    // Renderer with anti-aliasing
+    // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mountRef.current.appendChild(renderer.domElement);
 
-    // Lighting setup
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
     scene.add(ambientLight);
 
     const pointLight1 = new THREE.PointLight(0x4f46e5, 1, 50);
@@ -82,31 +86,26 @@ const NetworkVisualizer = () => {
     pointLight2.position.set(20, 5, 10);
     scene.add(pointLight2);
 
-    // Build the network
+    // Build neural network
     buildNeuralNetwork(scene);
 
-    // Mouse interaction for camera control
-    const handleMouseMove = (event) => {
-      mouseRef.current.x = (event.clientX / window.innerWidth) * 2 - 1;
-      mouseRef.current.y = -(event.clientY / window.innerHeight) * 2 + 1;
-    };
-    window.addEventListener('mousemove', handleMouseMove);
+    // Slow automatic rotation for cinematic effect
+    let autoRotationAngle = 0;
 
     // Animation loop
     let animationFrame;
     const animate = () => {
       animationFrame = requestAnimationFrame(animate);
 
-      // Smooth camera orbit based on mouse
-      const time = Date.now() * 0.0001;
-      camera.position.x = Math.cos(time + mouseRef.current.x * 0.5) * 25 + 9;
-      camera.position.z = Math.sin(time + mouseRef.current.x * 0.5) * 25;
-      camera.position.y = 8 + mouseRef.current.y * 5;
+      // Slow auto-rotation
+      autoRotationAngle += 0.0003;
+      camera.position.x = Math.cos(autoRotationAngle) * 25 + 9;
+      camera.position.z = Math.sin(autoRotationAngle) * 25;
       camera.lookAt(9, 0, 0);
 
-      // Update active paths animation
-      if (isAnimating) {
-        updateActivePaths();
+      // Update dramatic activation animation
+      if (animationStage === 'animating') {
+        updateDramaticAnimation();
       }
 
       renderer.render(scene, camera);
@@ -125,13 +124,12 @@ const NetworkVisualizer = () => {
     // Cleanup
     return () => {
       window.removeEventListener('resize', handleResize);
-      window.removeEventListener('mousemove', handleMouseMove);
       cancelAnimationFrame(animationFrame);
       mountRef.current?.removeChild(renderer.domElement);
     };
-  }, []);
+  }, [animationStage]);
 
-  // Build complete neural network with individual neurons
+  // Build neural network with all neurons and connections
   const buildNeuralNetwork = (scene) => {
     NETWORK_CONFIG.layers.forEach((layer, layerIdx) => {
       const neurons = createNeuronLayer(layer, layerIdx);
@@ -142,7 +140,7 @@ const NetworkVisualizer = () => {
       // Create connections to next layer
       if (layerIdx < NETWORK_CONFIG.layers.length - 1) {
         const nextLayer = NETWORK_CONFIG.layers[layerIdx + 1];
-        createSmartConnections(scene, layer, nextLayer, layerIdx);
+        createConnectionsToNextLayer(scene, layer, nextLayer, layerIdx);
       }
 
       // Add layer label
@@ -155,7 +153,6 @@ const NetworkVisualizer = () => {
     const neurons = [];
     const neuronSize = 0.08;
     
-    // Calculate grid layout based on neuron count
     const gridSize = Math.ceil(Math.sqrt(layer.neurons));
     const spacing = 0.25;
     const offset = (gridSize - 1) * spacing / 2;
@@ -164,7 +161,6 @@ const NetworkVisualizer = () => {
       const row = Math.floor(i / gridSize);
       const col = i % gridSize;
       
-      // Position neurons in a grid
       const x = layer.position;
       const y = row * spacing - offset;
       const z = col * spacing - offset;
@@ -173,9 +169,9 @@ const NetworkVisualizer = () => {
       const material = new THREE.MeshPhongMaterial({
         color: layer.color,
         transparent: true,
-        opacity: 0.8,
+        opacity: 0.15, // Dimmed by default
         emissive: layer.color,
-        emissiveIntensity: 0.2
+        emissiveIntensity: 0
       });
 
       const neuron = new THREE.Mesh(geometry, material);
@@ -185,7 +181,8 @@ const NetworkVisualizer = () => {
         layerIdx,
         neuronIdx: i,
         baseColor: layer.color,
-        baseEmissive: 0.2
+        isActive: false,
+        activationStrength: 0
       };
 
       neurons.push(neuron);
@@ -195,25 +192,31 @@ const NetworkVisualizer = () => {
   };
 
   // Create smart sampled connections between layers
-  const createSmartConnections = (scene, currentLayer, nextLayer, layerIdx) => {
+  const createConnectionsToNextLayer = (scene, currentLayer, nextLayer, layerIdx) => {
     const currentNeurons = neuronMeshesRef.current[layerIdx];
-    const maxConnections = 10000; // Performance limit
+    const maxConnections = 10000;
     const totalPossible = currentLayer.neurons * nextLayer.neurons;
     const samplingRate = Math.min(1, maxConnections / totalPossible);
 
-    // Sample connections intelligently
+    const nextGridSize = Math.ceil(Math.sqrt(nextLayer.neurons));
+    const spacing = 0.25;
+    const offset = (nextGridSize - 1) * spacing / 2;
+
     for (let i = 0; i < currentLayer.neurons; i++) {
       const connectionsPerNeuron = Math.ceil(nextLayer.neurons * samplingRate);
       
       for (let j = 0; j < connectionsPerNeuron; j++) {
-        // Sample next layer neurons
         const targetIdx = Math.floor(Math.random() * nextLayer.neurons);
         
         const startPos = currentNeurons[i].position;
+        
+        // Calculate target position
+        const targetRow = Math.floor(targetIdx / nextGridSize);
+        const targetCol = targetIdx % nextGridSize;
         const endPos = new THREE.Vector3(
           nextLayer.position,
-          (targetIdx % Math.ceil(Math.sqrt(nextLayer.neurons))) * 0.25 - Math.ceil(Math.sqrt(nextLayer.neurons)) * 0.125,
-          Math.floor(targetIdx / Math.ceil(Math.sqrt(nextLayer.neurons))) * 0.25 - Math.ceil(Math.sqrt(nextLayer.neurons)) * 0.125
+          targetRow * spacing - offset,
+          targetCol * spacing - offset
         );
 
         const points = [startPos, endPos];
@@ -221,7 +224,7 @@ const NetworkVisualizer = () => {
         const material = new THREE.LineBasicMaterial({
           color: 0x4f46e5,
           transparent: true,
-          opacity: 0.05, // Very subtle by default
+          opacity: 0.08, // Very dim by default
           linewidth: 1
         });
 
@@ -230,7 +233,8 @@ const NetworkVisualizer = () => {
           layerIdx, 
           sourceIdx: i, 
           targetIdx,
-          isActive: false 
+          isActive: false,
+          baseOpacity: 0.08
         };
         
         scene.add(line);
@@ -246,7 +250,7 @@ const NetworkVisualizer = () => {
     canvas.width = 512;
     canvas.height = 128;
 
-    context.fillStyle = '#ffffff';
+    context.fillStyle = 'rgba(255, 255, 255, 0.6)';
     context.font = 'bold 36px Arial';
     context.textAlign = 'center';
     context.fillText(layer.name, 256, 50);
@@ -258,7 +262,7 @@ const NetworkVisualizer = () => {
     const material = new THREE.SpriteMaterial({ 
       map: texture, 
       transparent: true,
-      opacity: 0.9 
+      opacity: 0.7
     });
     const sprite = new THREE.Sprite(material);
     sprite.position.set(layer.position, -4, 0);
@@ -266,108 +270,120 @@ const NetworkVisualizer = () => {
     scene.add(sprite);
   };
 
-  // Animate active neural paths during prediction
-  const updateActivePaths = () => {
+  // Dramatic staged activation animation
+  const updateDramaticAnimation = () => {
     if (!modelData || !modelData.features) return;
 
-    // Reset all neurons to base state
-    neuronMeshesRef.current.forEach(neurons => {
-      neurons.forEach(neuron => {
-        neuron.material.emissiveIntensity = neuron.userData.baseEmissive;
-        neuron.material.opacity = 0.8;
-      });
-    });
+    const state = animationStateRef.current;
+    const totalLayers = NETWORK_CONFIG.layers.length - 1; // Exclude input
+    const stageDuration = 0.6; // 0.6 seconds per layer (total ~4 seconds for 7 layers)
 
-    // Light up neurons based on activation strength
-    modelData.features.forEach((featureMap, layerIdx) => {
-      if (layerIdx + 1 >= neuronMeshesRef.current.length) return;
+    // Increment animation progress
+    state.progress += 0.016; // ~60fps
+
+    // Calculate current stage (which layer we're lighting up)
+    const currentStage = Math.floor(state.progress / stageDuration);
+    
+    if (currentStage >= totalLayers) {
+      // Animation complete - freeze the active state
+      state.isComplete = true;
+      setAnimationStage('complete');
+      return;
+    }
+
+    state.stage = currentStage;
+
+    // Light up neurons layer by layer
+    for (let layerIdx = 0; layerIdx <= currentStage; layerIdx++) {
+      const actualLayerIdx = layerIdx + 1; // Skip input layer in rendering
+      if (actualLayerIdx >= neuronMeshesRef.current.length) continue;
+
+      const neurons = neuronMeshesRef.current[actualLayerIdx];
+      const featureMap = modelData.features[layerIdx];
       
-      const neurons = neuronMeshesRef.current[layerIdx + 1];
+      if (!featureMap) continue;
+
       const flatFeatures = featureMap.flat(Infinity);
-      
+      const stageProgress = (state.progress - layerIdx * stageDuration) / stageDuration;
+      const easedProgress = Math.min(stageProgress, 1);
+
+      // Activate neurons based on feature strength
       flatFeatures.forEach((activation, neuronIdx) => {
         if (neuronIdx >= neurons.length) return;
         
+        const neuron = neurons[neuronIdx];
         const intensity = Math.abs(activation);
         const normalized = Math.min(intensity * 2, 1);
-        
-        neurons[neuronIdx].material.emissiveIntensity = 0.2 + normalized * 0.8;
-        neurons[neuronIdx].material.opacity = 0.8 + normalized * 0.2;
-      });
-    });
 
-    // Pulse effect on connections
-    const pulseTime = Date.now() * 0.002;
-    connectionLinesRef.current.forEach((line, idx) => {
-      if (idx % 5 === 0) { // Pulse only subset for performance
-        line.material.opacity = 0.05 + Math.sin(pulseTime + idx * 0.1) * 0.03;
+        // Only light up if activation is significant
+        if (normalized > 0.1) {
+          neuron.userData.isActive = true;
+          neuron.userData.activationStrength = normalized;
+          
+          // Dramatic glow increase
+          neuron.material.opacity = 0.15 + (normalized * 0.85 * easedProgress);
+          neuron.material.emissiveIntensity = normalized * 1.2 * easedProgress;
+        }
+      });
+    }
+
+    // Light up connections progressively
+    connectionLinesRef.current.forEach(line => {
+      const lineLayer = line.userData.layerIdx;
+      
+      if (lineLayer < currentStage) {
+        // Fully lit for completed stages
+        const sourceNeuron = neuronMeshesRef.current[lineLayer + 1]?.[line.userData.sourceIdx];
+        if (sourceNeuron?.userData.isActive) {
+          line.userData.isActive = true;
+          line.material.opacity = 0.4; // Active connections stay bright
+          line.material.color.setHex(0x00d4ff);
+        }
+      } else if (lineLayer === currentStage) {
+        // Currently animating stage
+        const stageProgress = (state.progress - currentStage * stageDuration) / stageDuration;
+        const sourceNeuron = neuronMeshesRef.current[lineLayer + 1]?.[line.userData.sourceIdx];
+        
+        if (sourceNeuron?.userData.isActive) {
+          line.userData.isActive = true;
+          line.material.opacity = 0.4 * Math.min(stageProgress, 1);
+          line.material.color.setHex(0x00d4ff);
+        }
       }
     });
   };
 
-  // Trigger animation when new prediction arrives
-  useEffect(() => {
-    if (modelData && isAnimating) {
-      setTimeout(() => setIsAnimating(false), 5000);
-    }
-  }, [modelData]);
-
   return (
     <div style={{ 
       width: '100%', 
-      height: '700px', 
+      height: '100%', 
       background: 'linear-gradient(135deg, #0a0e27 0%, #1a1d2e 100%)',
-      borderRadius: '12px',
-      overflow: 'hidden',
       position: 'relative'
     }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
       
-      {/* Prediction overlay */}
-      {modelData && (
-        <div style={{
-          position: 'absolute',
-          top: '20px',
-          right: '20px',
-          background: 'rgba(15, 23, 42, 0.9)',
-          backdropFilter: 'blur(10px)',
-          padding: '20px',
-          borderRadius: '12px',
-          border: '1px solid rgba(79, 70, 229, 0.3)',
-          color: 'white',
-          fontFamily: 'monospace',
-          minWidth: '200px',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)'
-        }}>
-          <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '8px' }}>PREDICTION</div>
-          <div style={{ fontSize: '48px', fontWeight: 'bold', color: '#10b981', marginBottom: '12px' }}>
-            {modelData.prediction}
-          </div>
-          <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '4px' }}>CONFIDENCE</div>
-          <div style={{ fontSize: '20px', color: '#00d4ff' }}>
-            {(modelData.confidence * 100).toFixed(1)}%
-          </div>
-        </div>
-      )}
-
-      {/* Controls hint */}
+      {/* Status indicator */}
       <div style={{
         position: 'absolute',
         bottom: '20px',
         left: '20px',
-        color: 'rgba(255, 255, 255, 0.4)',
-        fontSize: '12px',
-        fontFamily: 'monospace'
+        color: 'rgba(255, 255, 255, 0.5)',
+        fontSize: '13px',
+        fontFamily: 'monospace',
+        background: 'rgba(15, 23, 42, 0.6)',
+        padding: '12px 20px',
+        borderRadius: '8px',
+        backdropFilter: 'blur(10px)'
       }}>
-        {!modelData && '● Waiting for prediction...'}
-        {modelData && isAnimating && '● Neural pathways active...'}
-        {modelData && !isAnimating && '● Move mouse to rotate view'}
+        {animationStage === 'waiting' && '● Network ready - Waiting for prediction...'}
+        {animationStage === 'animating' && '● Neural pathways activating...'}
+        {animationStage === 'complete' && '● Active decision path frozen'}
       </div>
 
       {/* Network stats */}
       <div style={{
         position: 'absolute',
-        top: '20px',
+        top: '80px',
         left: '20px',
         background: 'rgba(15, 23, 42, 0.7)',
         backdropFilter: 'blur(10px)',
@@ -379,7 +395,7 @@ const NetworkVisualizer = () => {
         fontSize: '11px'
       }}>
         <div style={{ marginBottom: '4px' }}>Total Neurons: <span style={{ color: '#06b6d4' }}>717</span></div>
-        <div>Connections: <span style={{ color: '#10b981' }}>~10,000</span></div>
+        <div>Active Connections: <span style={{ color: '#10b981' }}>~10,000</span></div>
       </div>
     </div>
   );
