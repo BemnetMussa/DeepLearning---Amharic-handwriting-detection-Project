@@ -9,10 +9,12 @@
   },
   "dependencies": {
     "react": "^18.2.0",
+    "react-canvas-draw": "^1.2.1",
     "react-dom": "^18.2.0",
     "three": "^0.160.0"
   },
   "devDependencies": {
+    "install": "^0.13.0",
     "vite": "latest",
     "vite-plugin-singlefile": "^2.3.0"
   }

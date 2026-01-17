@@ -1,173 +1,93 @@
-import streamlit as st
-import cv2
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
-from streamlit_drawable_canvas import st_canvas
-import json
-import base64
+import io
 import os
-
+import glob
+import random
+from PIL import Image
 from src.inference import Predictor
 
-# ============================================================================
-# SETUP
-# ============================================================================
-st.set_page_config(
-    page_title="Neural Network Visualizer",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-def get_frontend_html():
-    possible_paths = ["assets/frontend/index.html"]
-    for path in possible_paths:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return f.read()
-    return None
+# 1. LOAD MODEL
+print("⏳ Loading Model...")
+predictor = Predictor("assets/amharic_ocr_v2.pth")
+print("✅ Model Loaded")
 
-# ============================================================================
-# CSS - SIMPLE & CLEAN
-# ============================================================================
-st.markdown("""
-<style>
-    /* Kill Streamlit UI */
-    .block-container { padding: 0 !important; max-width: 100% !important; }
-    .main > div { padding: 0 !important; }
-    header, footer, #MainMenu { display: none !important; }
-    .stStatusWidget { display: none !important; }
+# 2. INDEX DATASET
+BASE_DIR = r"C:\Users\XPS\Downloads\Amharic Dataset\uni_dataset"
+SEARCH_PATH = os.path.join(BASE_DIR, "**", "*")
+
+print(f"⏳ Indexing dataset at: {BASE_DIR}")
+dataset_files = [
+    f for f in glob.glob(SEARCH_PATH, recursive=True) 
+    if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))
+]
+print(f"✅ Indexed {len(dataset_files)} images.")
+
+@app.post("/predict")
+async def predict(file: UploadFile = File(...)):
+    """ Endpoint for the Drawing Canvas """
+    contents = await file.read()
     
-    /* React Background */
-    .stHtml iframe {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        width: 100vw !important;
-        height: 100vh !important;
-        border: none !important;
-        z-index: 1 !important;
+    # ---------------------------------------------------------
+    # FIX 1: Canvas must be RGBA to maintain (H, W, 4) shape
+    # This prevents the 'IndexError: tuple index out of range'
+    # ---------------------------------------------------------
+    image = Image.open(io.BytesIO(contents)).convert('RGBA')
+    image_np = np.array(image)
+
+    # Run Inference
+    label, conf, _, _, _ = predictor.predict_with_heatmap(image_np)
+    features_flat = [feat.flatten().tolist() for feat in predictor.features]
+
+    return {
+        "prediction": label,
+        "confidence": round(float(conf) * 100, 2),
+        "features": features_flat
     }
+
+@app.get("/predict_random")
+async def predict_random():
+    """ Endpoint for the Auto-Play Loop """
+    if not dataset_files:
+        return {"error": "No images found. Check path in server.py"}
+
+    img_path = random.choice(dataset_files)
+    parent_folder = os.path.basename(os.path.dirname(img_path))
     
-    /* Floating Drawing Panel */
-    .draw-panel {
-        position: fixed !important;
-        top: 30px !important;
-        left: 30px !important;
-        z-index: 9999 !important;
-        background: rgba(0, 0, 0, 0.8) !important;
-        backdrop-filter: blur(20px) !important;
-        border: 1px solid rgba(255, 255, 255, 0.2) !important;
-        border-radius: 16px !important;
-        padding: 20px !important;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.9) !important;
-    }
-    
-    /* Canvas */
-    .draw-panel canvas {
-        border-radius: 8px !important;
-        margin-bottom: 12px !important;
-    }
-    
-    /* Buttons */
-    .draw-panel button {
-        width: 100% !important;
-        background: rgba(255, 255, 255, 0.1) !important;
-        border: 1px solid rgba(255, 255, 255, 0.3) !important;
-        color: white !important;
-        border-radius: 8px !important;
-        padding: 10px !important;
-        font-size: 12px !important;
-        font-weight: 600 !important;
-        text-transform: uppercase !important;
-        letter-spacing: 1px !important;
-        cursor: pointer !important;
-        transition: all 0.2s !important;
-    }
-    
-    .draw-panel button:hover {
-        background: rgba(255, 255, 255, 0.2) !important;
-        border-color: rgba(255, 255, 255, 0.5) !important;
-    }
-    
-    .draw-panel [data-testid="column"] {
-        padding: 0 4px !important;
-    }
-    
-    .draw-panel [data-testid="column"]:first-child {
-        padding-left: 0 !important;
-    }
-    
-    .draw-panel [data-testid="column"]:last-child {
-        padding-right: 0 !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+    try:
+        # ---------------------------------------------------------
+        # FIX 2: Dataset images must be RGB to ensure (H, W, 3)
+        # .convert('L') would crash it here too!
+        # ---------------------------------------------------------
+        image = Image.open(img_path).convert('RGB')
+        image_np = np.array(image)
 
-# ============================================================================
-# BACKGROUND (React)
-# ============================================================================
-html_content = get_frontend_html()
-if html_content:
-    st.components.v1.html(html_content, height=0, scrolling=False)
+        # INTELLIGENT INVERSION
+        # Check if image is bright (White background)
+        if np.mean(image_np) > 127:
+            image_np = 255 - image_np
 
-# ============================================================================
-# DRAWING PANEL
-# ============================================================================
-@st.cache_resource
-def load_model():
-    return Predictor("assets/amharic_ocr_v2.pth")
+        label, conf, _, _, _ = predictor.predict_with_heatmap(image_np)
+        features_flat = [feat.flatten().tolist() for feat in predictor.features]
 
-predictor = load_model()
-
-st.markdown('<div class="draw-panel">', unsafe_allow_html=True)
-
-canvas = st_canvas(
-    fill_color="rgba(255, 255, 255, 1)",
-    stroke_width=20,
-    stroke_color="#FFFFFF",
-    background_color="#000000",
-    height=280,
-    width=280,
-    drawing_mode="freedraw",
-    key="canvas",
-    display_toolbar=False
-)
-
-col1, col2 = st.columns(2)
-with col1:
-    predict_btn = st.button("Predict")
-with col2:
-    clear_btn = st.button("Clear")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# ============================================================================
-# LOGIC
-# ============================================================================
-if predict_btn and canvas.image_data is not None:
-    if np.sum(canvas.image_data) > 0:
-        label, conf, _, raw_img, probs = predictor.predict_with_heatmap(canvas.image_data)
-        
-        features = [f.detach().cpu().numpy().tolist() for f in predictor.features]
-        _, buffer = cv2.imencode('.png', raw_img)
-        img_b64 = base64.b64encode(buffer).decode('utf-8')
-        
-        data = {
+        return {
             "prediction": label,
-            "confidence": float(conf),
-            "features": features,
-            "raw_img_b64": f"data:image/png;base64,{img_b64}",
-            "all_probabilities": probs,
-            "active": True
+            "true_label": parent_folder,
+            "confidence": round(float(conf) * 100, 2),
+            "features": features_flat,
+            "filename": os.path.basename(img_path)
         }
-        
-        save_path = "static/data.json" 
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        
-        with open(save_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-            
-        st.rerun()
-
-if clear_btn:
-    st.rerun()
+    except Exception as e:
+        print(f"Error processing {img_path}: {e}")
+        return {"error": str(e)}
