@@ -806,6 +806,47 @@ const highlightDecisionPath = () => {
     canvasRef.current?.clear();
   };
 
+  useEffect(() => {
+    let demoInterval = null;
+
+    if (isDemoMode) {
+      const fetchRandom = async () => {
+        try {
+          const res = await fetch('http://127.0.0.1:8000/predict_random');
+          const data = await res.json();
+          if (data.error) {
+            console.warn('Dataset error:', data.error);
+            return;
+          }
+
+          const featuresFlat = Array.isArray(data.features)
+            ? data.features.map(f => (Array.isArray(f) ? f.flat(Infinity) : []))
+            : [];
+
+          modelDataRef.current = { raw: data, featuresFlat };
+          predictionRef.current = summarizePrediction(data, featuresFlat);
+
+          resetVisualState();
+          clockRef.current = performance.now();
+          setModelData({ raw: data, featuresFlat });
+          setPrediction(summarizePrediction(data, featuresFlat));
+          setAnimationStage('animating');
+          stageRef.current = 'animating';
+          animationStateRef.current = { stage: 0, progress: 0, isComplete: false };
+        } catch (err) {
+          console.error('Auto-play error:', err);
+        }
+      };
+
+      fetchRandom();                 // run once immediately
+      demoInterval = setInterval(fetchRandom, 4000); // then every 4s
+    }
+
+    return () => {
+      if (demoInterval) clearInterval(demoInterval);
+    };
+  }, [isDemoMode]);
+
   return (
     <div style={{ 
       width: '100%', height: '100vh', background: '#000000',
@@ -945,23 +986,26 @@ const highlightDecisionPath = () => {
       </div>
 
       {/* Demo Mode Toggle Button */}
-      <div style={{ position: 'absolute', bottom: '30px', right: '30px', zIndex: 20 }}>
-        <button
-          onClick={() => setIsDemoMode(!isDemoMode)}
-          style={{
-            background: isDemoMode ? '#00ffff' : 'transparent',
-            color: isDemoMode ? '#000' : '#00ffff',
-            border: '1px solid #00ffff',
-            padding: '10px 20px',
-            fontFamily: 'monospace',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-            borderRadius: '8px'
-          }}
-        >
-          {isDemoMode ? '⏹ STOP DEMO' : '▶ AUTO-PLAY DATASET'}
-        </button>
-      </div>
+      <div style={{ position: 'absolute', bottom: '30px', right: '30px', zIndex: 100 }}>
+  <button 
+    onClick={() => setIsDemoMode(!isDemoMode)}
+    style={{
+      background: isDemoMode ? '#00ffff' : 'rgba(0,0,0,0.5)',
+      color: isDemoMode ? '#000' : '#00ffff',
+      border: '1px solid #00ffff',
+      padding: '12px 24px',
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      cursor: 'pointer',
+      borderRadius: '4px',
+      fontWeight: 'bold',
+      boxShadow: isDemoMode ? '0 0 15px #00ffff' : 'none',
+      transition: 'all 0.3s'
+    }}
+  >
+    {isDemoMode ? '⏹ STOP AUTO-PLAY' : '▶ PLAY DATASET'}
+  </button>
+</div>
     </div>
   );
 };
