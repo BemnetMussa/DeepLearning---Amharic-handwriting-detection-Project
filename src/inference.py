@@ -50,6 +50,7 @@ class Predictor:
             model.block2.register_forward_hook(self._hook)
             model.block3.register_forward_hook(self._hook)
             model.block4.register_forward_hook(self._hook)
+            model.classifier.register_forward_hook(self._hook)
             
             return model
             

@@ -31,29 +31,31 @@ print(f"✅ Indexed {len(dataset_files)} images.")
 async def predict(file: UploadFile = File(...)):
     contents = await file.read()
     
-    # 1. Open Image (Canvas sends White Text on Black Background)
+    # 1. Process Image (Same as before)
     image = Image.open(io.BytesIO(contents)).convert('RGB')
-    
-    # 2. INVERT COLORS (CRITICAL FIX)
-    # The model was likely trained on White Paper with Black Text.
-    # The Canvas is Black Void with White Text. We must flip it.
-    image = ImageOps.invert(image) 
-    
-    # 3. Add Alpha Channel to satisfy inference.py (H, W, 4)
+    image = image.resize((28, 28)) 
+    # image = ImageOps.invert(image)  # Invert if needed    
     image_np = np.array(image)
+    
+    # Add Alpha for the model inference
     h, w, _ = image_np.shape
     alpha = np.full((h, w, 1), 255, dtype=np.uint8)
     image_rgba = np.concatenate((image_np, alpha), axis=2)
 
-    # 4. REMOVED MANUAL NORMALIZATION (The Predictor does this!)
-    # Do NOT divide by 255.0 here.
+    # 2. EXTRACT THE INPUT GRID (The new part)
+    # We want the grayscale intensity (0.0 to 1.0)
+    # This represents the "activation" of the input neurons
+    grayscale = np.mean(image_np, axis=2) / 255.0
+    input_layer_flat = grayscale.flatten().tolist()
 
+    # 3. Predict
     label, conf, _, _, _ = predictor.predict_with_heatmap(image_rgba)
     features_flat = [feat.flatten().tolist() for feat in predictor.features]
 
     return {
         "prediction": label,
         "confidence": round(float(conf) * 100, 2),
+        "input_layer": input_layer_flat, # <--- SEND THIS TO REACT
         "features": features_flat
     }
 
@@ -66,22 +68,28 @@ async def predict_random():
     parent_folder = os.path.basename(os.path.dirname(img_path))
     
     try:
-        # 1. Open Image
+        # 1. Open Image & Force Resize
         image = Image.open(img_path).convert('RGB')
+        image = image.resize((28, 28)) 
         image_np = np.array(image)
 
-        # 2. CHECK COLORS
-        # If image is White Paper (High Mean), KEEP IT.
-        # If image is Dark Mode (Low Mean), Invert it.
-        if np.mean(image_np) < 127:
+        # 2. CHECK COLORS (The Fix)
+        # We want Black Background (Low Mean). 
+        # If the image is White Paper (High Mean > 127), we INVERT it.
+        if np.mean(image_np) > 127:
             image_np = 255 - image_np
 
-        # 3. Add Alpha
+        # 3. Add Alpha Channel
         h, w, _ = image_np.shape
         alpha = np.full((h, w, 1), 255, dtype=np.uint8)
         image_rgba = np.concatenate((image_np, alpha), axis=2)
 
-        # 4. Run (No Manual Normalization)
+        # 4. PREPARE INPUT LAYER FOR FRONTEND (The Missing Piece)
+        # Convert to 0.0-1.0 scale for the 3D grid
+        grayscale = np.mean(image_np, axis=2) / 255.0
+        input_layer_flat = grayscale.flatten().tolist()
+
+        # 5. Run Prediction
         label, conf, _, _, _ = predictor.predict_with_heatmap(image_rgba)
         features_flat = [feat.flatten().tolist() for feat in predictor.features]
 
@@ -89,6 +97,7 @@ async def predict_random():
             "prediction": label,
             "true_label": parent_folder,
             "confidence": round(float(conf) * 100, 2),
+            "input_layer": input_layer_flat, # <--- Sending the pixels now!
             "features": features_flat,
             "filename": os.path.basename(img_path)
         }

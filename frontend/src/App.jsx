@@ -31,11 +31,13 @@ const CHARACTERS = [
 
 const NETWORK_CONFIG = {
   layers: [
-    { name: 'Input',  neurons: 1,   color: '#333333', position: 0 },
+    { name: 'Input',  neurons: 784, color: '#ffffff', position: -4 }, 
+    // { name: 'Input',  neurons: 1,   color: '#333333', position: 0 },
     { name: 'Block 1', neurons: 32,  color: '#333333', position: 3 },
     { name: 'Block 2', neurons: 64,  color: '#333333', position: 6 },
     { name: 'Block 3', neurons: 128, color: '#333333', position: 9 },
-    { name: 'Block 4', neurons: 256, color: '#333333', position: 12 }
+    { name: 'Block 4', neurons: 256, color: '#333333', position: 12 },
+    { name: 'Output', neurons: 237, color: '#333333', position: 15 }
   ]
 };
 
@@ -285,8 +287,7 @@ const canvasRef = useRef(null); // NEW: draw canvas ref
       const neurons = createNeuronLayer(layer, layerIdx);
       neuronMeshesRef.current.push(neurons);
       neurons.forEach(neuron => scene.add(neuron));
-
-      if (layerIdx < NETWORK_CONFIG.layers.length - 1) {
+      if (layerIdx < NETWORK_CONFIG.layers.length - 1 && layerIdx > 0) {
         const nextLayer = NETWORK_CONFIG.layers[layerIdx + 1];
         createConnectionsToNextLayer(scene, layer, nextLayer, layerIdx);
       }
@@ -386,8 +387,58 @@ const buildCharacterGrid = (scene) => {
   };
 
 const createNeuronLayer = (layer, layerIdx) => {
-    const neurons = [];
-    const neuronSize = 0.15; // Slightly larger for visibility
+  
+  const neuronSize = 0.15;
+
+  const neurons = [];
+  
+  // --- CORRECTED LAYER 0 LOGIC (THE INPUT IMAGE) ---
+  if (layerIdx === 0) {
+    const cols = 28;
+    // Tighter spacing so pixels touch like a screen
+    const spacing = 0.18; 
+    // Center the grid vertically and horizontally
+    const vOffset = (28 * spacing) / 2;
+    const hOffset = (28 * spacing) / 2;
+
+    for (let i = 0; i < layer.neurons; i++) {
+      // Standard Image Mapping:
+      // Row 0 is at the TOP. Row 27 is at the BOTTOM.
+      const row = Math.floor(i / cols); 
+      const col = i % cols;             
+
+      // 3D Mapping:
+      // X = Depth (Fixed)
+      // Y = Vertical (High Y is Top, Low Y is Bottom) -> Invert Row
+      // Z = Horizontal (Low Z is Left, High Z is Right)
+      
+      const x = layer.position;
+      const y = ((27 - row) * spacing) - vOffset; // 27 - row flips it upright
+      const z = (col * spacing) - hOffset;        // Standard left-to-right
+
+      // Make cubes flat like pixels
+      const geometry = new THREE.BoxGeometry(0.15, 0.15, 0.05); 
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x000000,      // Start Black
+        emissive: 0xffffff,   // White Glow
+        emissiveIntensity: 0, // Start Off
+        transparent: true,
+        opacity: 0.0          // Start Invisible
+      });
+
+      const neuron = new THREE.Mesh(geometry, material);
+      neuron.position.set(x, y, z);
+      
+      neuron.userData = { 
+        layerIdx, 
+        neuronIdx: i,
+        isInputPixel: true // Mark this for the animation loop
+      };
+      neurons.push(neuron);
+    }
+  } 
+  // LOGIC FOR HIDDEN LAYERS (3D CLUSTERS - EXISTING CODE)
+  else {
     const gridSize = Math.ceil(Math.sqrt(layer.neurons));
     const spacing = 0.28;
     const offset = (gridSize - 1) * spacing / 2;
@@ -401,30 +452,26 @@ const createNeuronLayer = (layer, layerIdx) => {
       const z = col * spacing - offset;
 
       const geometry = new THREE.BoxGeometry(neuronSize, neuronSize, neuronSize);
-      // ERROR FIX: Use StandardMaterial to support Emissive (Glow) properly
-      // In createNeuronLayer function:
       const material = new THREE.MeshStandardMaterial({
-        color: 0x444444,      // from 0x111111 to DARK GRAY so you can see them
+        color: 0x444444,
         emissive: 0x000000,
-        emissiveIntensity: 0,
         transparent: true,
-        opacity: 0.3          // from 0.1 to 0.3
+        opacity: 0.3
       });
 
       const neuron = new THREE.Mesh(geometry, material);
       neuron.position.set(x, y, z);
       neuron.userData = { 
-        layerIdx,
-        neuronIdx: i,
+        layerIdx, 
+        neuronIdx: i, 
         baseColor: new THREE.Color(layer.color),
-        isActive: false,
-        isPathActive: false
       };
-
       neurons.push(neuron);
     }
-    return neurons;
-  };
+  }
+  
+  return neurons;
+};
 
   const createConnectionsToNextLayer = (scene, currentLayer, nextLayer, layerIdx) => {
     const currentNeurons = neuronMeshesRef.current[layerIdx];
@@ -525,7 +572,6 @@ const resetVisualState = () => {
   });
 };
 
-// replace updateDramaticAnimation with delta-time + completion guard
 const updateDramaticAnimation = () => {
     if (stageRef.current === 'complete') return; 
 
@@ -551,36 +597,67 @@ const updateDramaticAnimation = () => {
     return; 
   }
   const numLayers = neuronMeshesRef.current.length;
-  neuronMeshesRef.current.forEach((layerNeurons, lIdx) => {
+// Inside updateDramaticAnimation... after calculating wavePos
+neuronMeshesRef.current.forEach((layerNeurons, lIdx) => {
     const layerTrigger = lIdx / numLayers;
     const dist = wavePos - layerTrigger;
 
-    if (dist > 0) {
-      // READ FROM REF
-      const features = data.featuresFlat[lIdx] || []; 
-      
-      layerNeurons.forEach((neuron, nIdx) => {
-        const val = features[nIdx] ? Math.abs(features[nIdx]) : 0;
-        
-        // Lower threshold to ensure things light up
-        if (val > 0.05) { 
-          neuron.userData.isActive = true;
-          
-          // Flash Calculation
-          let intensity = 0;
-          if (dist < 0.3) {
-             intensity = Math.sin((dist / 0.3) * Math.PI); // Pulse
-          } else {
-             intensity = 0.1; // Dim trail
-          }
+    // Get data for this layer
+    const features = data.featuresFlat[lIdx] || [];
 
-          // Force the visual update
-          neuron.material.emissive.setHex(0x00ffff);
-          neuron.material.emissiveIntensity = intensity * 5.0; // Crank up the brightness
-          neuron.material.opacity = 0.1 + intensity;
+    layerNeurons.forEach((neuron, nIdx) => {
+      // Get value (0.0 to 1.0)
+      const val = features[nIdx] ? Math.abs(features[nIdx]) : 0;
+
+      // --- CASE 1: INPUT LAYER (STRICT VISIBILITY) ---
+      if (lIdx === 0) {
+        // If pixel is dark (background), hide it completely.
+        if (val < 0.15) {
+            neuron.visible = false; 
+            neuron.material.opacity = 0;
+            neuron.material.emissiveIntensity = 0;
+        } else {
+            // If pixel is bright (text), show it clearly.
+            neuron.visible = true;
+            neuron.material.opacity = 1.0; // Make it solid
+            neuron.material.color.setHex(0xffffff); // White
+            neuron.material.emissive.setHex(0xffffff); // White Glow
+            neuron.material.emissiveIntensity = 1.5; 
         }
-      });
-    }
+        
+        neuron.userData.isActive = val > 0.15;
+      } 
+      
+      // --- CASE 2: HIDDEN LAYERS (PULSING BRAIN) ---
+      else {
+        // Ensure hidden neurons are always visible (but dim)
+        neuron.visible = true; 
+
+        // Only animate if the wave hits this layer
+        if (dist > 0) {
+          if (val > 0.05) { // Threshold for neurons
+            neuron.userData.isActive = true;
+
+            // Flash Calculation
+            let intensity = 0;
+            if (dist < 0.3) {
+               intensity = Math.sin((dist / 0.3) * Math.PI); 
+            } else {
+               intensity = 0.1; // Dim trail
+            }
+
+            neuron.material.emissive.setHex(0x00ffff); // Cyan
+            neuron.material.emissiveIntensity = intensity * 5.0; 
+            neuron.material.opacity = 0.1 + intensity;
+          } else {
+            // Reset inactive neurons
+            neuron.material.emissiveIntensity = 0;
+            neuron.material.opacity = 0.1;
+            neuron.material.color.setHex(0x333333);
+          }
+        }
+      }
+    });
   });
      // 2. ANIMATE CONNECTIONS (BOOSTED)
     connectionLinesRef.current.forEach(line => {
@@ -765,11 +842,12 @@ const highlightDecisionPath = () => {
     });
   };
  
-  const handlePredict = async () => {
+const handlePredict = async () => {
     if (!canvasRef.current) return;
     try {
       // 1) get PNG data from canvas
       const canvasData = canvasRef.current.getDataURL('png', false, '#000000');
+      
       // 2) base64 → blob
       const res = await fetch(canvasData);
       const blob = await res.blob();
@@ -783,10 +861,23 @@ const highlightDecisionPath = () => {
       });
       const data = await response.json();
 
-      // 4) update visualization (no polling needed for this update)
-      const featuresFlat = Array.isArray(data.features)
+      // --- START OF UPDATE ---
+      
+      // A. Extract the Hidden Layers (Existing logic)
+      const rawFeatures = Array.isArray(data.features)
         ? data.features.map(f => (Array.isArray(f) ? f.flat(Infinity) : []))
         : [];
+
+      // B. Extract the Input Pixels (New from Python)
+      // If Python doesn't send it for some reason, fallback to 784 zeros
+      const inputPixels = data.input_layer || new Array(784).fill(0);
+
+      // C. Combine: [Input Pixels, Hidden Layer 1, Hidden Layer 2, ...]
+      // This maps perfectly to your NETWORK_CONFIG layers
+      const featuresFlat = [inputPixels, ...rawFeatures];
+
+      // --- END OF UPDATE ---
+
       modelDataRef.current = { raw: data, featuresFlat };
       predictionRef.current = summarizePrediction(data, featuresFlat);
 
@@ -801,7 +892,6 @@ const highlightDecisionPath = () => {
       console.error('API Error:', err);
     }
   };
-
   const handleClear = () => {
     canvasRef.current?.clear();
   };
@@ -809,7 +899,7 @@ const highlightDecisionPath = () => {
   useEffect(() => {
     let demoInterval = null;
 
-    if (isDemoMode) {
+if (isDemoMode) {
       const fetchRandom = async () => {
         try {
           const res = await fetch('http://127.0.0.1:8000/predict_random');
@@ -819,9 +909,18 @@ const highlightDecisionPath = () => {
             return;
           }
 
-          const featuresFlat = Array.isArray(data.features)
+          // --- FIX STARTS HERE ---
+          // 1. Get Hidden Layers
+          const rawFeatures = Array.isArray(data.features)
             ? data.features.map(f => (Array.isArray(f) ? f.flat(Infinity) : []))
             : [];
+            
+          // 2. Get Input Layer (The 28x28 grid)
+          const inputPixels = data.input_layer || new Array(784).fill(0);
+
+          // 3. Combine them correctly: [Input, Layer1, Layer2...]
+          const featuresFlat = [inputPixels, ...rawFeatures];
+          // --- FIX ENDS HERE ---
 
           modelDataRef.current = { raw: data, featuresFlat };
           predictionRef.current = summarizePrediction(data, featuresFlat);
@@ -841,7 +940,6 @@ const highlightDecisionPath = () => {
       fetchRandom();                 // run once immediately
       demoInterval = setInterval(fetchRandom, 4000); // then every 4s
     }
-
     return () => {
       if (demoInterval) clearInterval(demoInterval);
     };
