@@ -287,10 +287,10 @@ const canvasRef = useRef(null); // NEW: draw canvas ref
       const neurons = createNeuronLayer(layer, layerIdx);
       neuronMeshesRef.current.push(neurons);
       neurons.forEach(neuron => scene.add(neuron));
-      if (layerIdx < NETWORK_CONFIG.layers.length - 1 && layerIdx > 0) {
-        const nextLayer = NETWORK_CONFIG.layers[layerIdx + 1];
-        createConnectionsToNextLayer(scene, layer, nextLayer, layerIdx);
-      }
+      if (layerIdx < NETWORK_CONFIG.layers.length - 1) {
+    const nextLayer = NETWORK_CONFIG.layers[layerIdx + 1];
+    createConnectionsToNextLayer(scene, layer, nextLayer, layerIdx);
+}
       createLayerLabel(scene, layer);
     });
   };
@@ -385,62 +385,57 @@ const buildCharacterGrid = (scene) => {
     
   
   };
-
 const createNeuronLayer = (layer, layerIdx) => {
-  
-  const neuronSize = 0.15;
-
   const neurons = [];
   
-  // --- CORRECTED LAYER 0 LOGIC (THE INPUT IMAGE) ---
+  // =========================================================
+  // 1. INPUT LAYER: TIGHT PIXEL GRID (The Screen)
+  // =========================================================
   if (layerIdx === 0) {
     const cols = 28;
-    // Tighter spacing so pixels touch like a screen
+    // Spacing 0.18 matches the size 0.17 (Tiny 0.01 gap)
     const spacing = 0.18; 
-    // Center the grid vertically and horizontally
     const vOffset = (28 * spacing) / 2;
     const hOffset = (28 * spacing) / 2;
 
     for (let i = 0; i < layer.neurons; i++) {
-      // Standard Image Mapping:
-      // Row 0 is at the TOP. Row 27 is at the BOTTOM.
       const row = Math.floor(i / cols); 
       const col = i % cols;             
 
-      // 3D Mapping:
-      // X = Depth (Fixed)
-      // Y = Vertical (High Y is Top, Low Y is Bottom) -> Invert Row
-      // Z = Horizontal (Low Z is Left, High Z is Right)
-      
       const x = layer.position;
-      const y = ((27 - row) * spacing) - vOffset; // 27 - row flips it upright
-      const z = (col * spacing) - hOffset;        // Standard left-to-right
+      const y = ((27 - row) * spacing) - vOffset; 
+      const z = (col * spacing) - hOffset;        
 
-      // Make cubes flat like pixels
-      const geometry = new THREE.BoxGeometry(0.15, 0.15, 0.05); 
+      // GEOMETRY FIX: 
+      // X = 0.05 (Thin thickness)
+      // Y = 0.17 (Square Height)
+      // Z = 0.17 (Square Width)
+      const geometry = new THREE.BoxGeometry(0.05, 0.17, 0.17); 
+      
       const material = new THREE.MeshStandardMaterial({
-        color: 0x000000,      // Start Black
-        emissive: 0xffffff,   // White Glow
-        emissiveIntensity: 0, // Start Off
-        transparent: true,
-        opacity: 0.0          // Start Invisible
+        color: 0x000000,
+        roughness: 0.4,
+        metalness: 0.1,
+        transparent: false, // Solid
+        opacity: 1.0
       });
 
       const neuron = new THREE.Mesh(geometry, material);
       neuron.position.set(x, y, z);
-      
-      neuron.userData = { 
-        layerIdx, 
-        neuronIdx: i,
-        isInputPixel: true // Mark this for the animation loop
-      };
+      neuron.userData = { layerIdx, neuronIdx: i };
       neurons.push(neuron);
     }
   } 
-  // LOGIC FOR HIDDEN LAYERS (3D CLUSTERS - EXISTING CODE)
+  
+  // =========================================================
+  // 2. HIDDEN LAYERS: FLOATING STRUCTURE (Original Spacing)
+  // =========================================================
   else {
     const gridSize = Math.ceil(Math.sqrt(layer.neurons));
-    const spacing = 0.28;
+    
+    // SPACING RESTORED: 0.28 (Keep the gap you liked)
+    const spacing = 0.28; 
+    
     const offset = (gridSize - 1) * spacing / 2;
 
     for (let i = 0; i < layer.neurons; i++) {
@@ -451,9 +446,11 @@ const createNeuronLayer = (layer, layerIdx) => {
       const y = row * spacing - offset;
       const z = col * spacing - offset;
 
-      const geometry = new THREE.BoxGeometry(neuronSize, neuronSize, neuronSize);
+      // SIZE: 0.12 (Small, elegant cubes)
+      const geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+      
       const material = new THREE.MeshStandardMaterial({
-        color: 0x444444,
+        color: 0x333333,
         emissive: 0x000000,
         transparent: true,
         opacity: 0.3
@@ -461,30 +458,40 @@ const createNeuronLayer = (layer, layerIdx) => {
 
       const neuron = new THREE.Mesh(geometry, material);
       neuron.position.set(x, y, z);
-      neuron.userData = { 
-        layerIdx, 
-        neuronIdx: i, 
-        baseColor: new THREE.Color(layer.color),
-      };
+      neuron.userData = { layerIdx, neuronIdx: i, baseColor: new THREE.Color(layer.color) };
       neurons.push(neuron);
     }
   }
-  
   return neurons;
 };
-
   const createConnectionsToNextLayer = (scene, currentLayer, nextLayer, layerIdx) => {
     const currentNeurons = neuronMeshesRef.current[layerIdx];
-    const maxConnections = 5000;
-    const totalPossible = currentLayer.neurons * nextLayer.neurons;
-    const samplingRate = Math.min(1, maxConnections / totalPossible);
+    // const maxConnections = 5000;
+    // const totalPossible = currentLayer.neurons * nextLayer.neurons;
+    // const samplingRate = Math.min(1, maxConnections / totalPossible);
 
-    const nextGridSize = Math.ceil(Math.sqrt(nextLayer.neurons));
+    let samplingRate = 0.0;
+    
+    if (layerIdx === 0) {
+        samplingRate = 0.02; // Only draw 2% of connections from input
+    } else {
+        const maxConnections = 2000;
+        const totalPossible = currentLayer.neurons * nextLayer.neurons;
+        samplingRate = Math.min(1, maxConnections / totalPossible);
+    }
+
+     const nextGridSize = Math.ceil(Math.sqrt(nextLayer.neurons));
     const spacing = 0.28;
     const offset = (nextGridSize - 1) * spacing / 2;
 
     for (let i = 0; i < currentLayer.neurons; i++) {
-      const connectionsPerNeuron = Math.max(1, Math.floor(nextLayer.neurons * samplingRate));
+        const connectionsPerNeuron = Math.max(0, Math.floor(nextLayer.neurons * samplingRate));
+      
+      // Randomize slightly so it doesn't look robotic
+      if (Math.random() > 0.5 && layerIdx === 0) continue; 
+
+      // for (let j = 0; j < connectionsPerNeuron; j++) {
+      // const connectionsPerNeuron = Math.max(1, Math.floor(nextLayer.neurons * samplingRate));
       for (let j = 0; j < connectionsPerNeuron; j++) {
         const targetIdx = Math.floor(Math.random() * nextLayer.neurons);
         const startPos = currentNeurons[i].position;
@@ -610,24 +617,20 @@ neuronMeshesRef.current.forEach((layerNeurons, lIdx) => {
       const val = features[nIdx] ? Math.abs(features[nIdx]) : 0;
 
       // --- CASE 1: INPUT LAYER (STRICT VISIBILITY) ---
-      if (lIdx === 0) {
-        // If pixel is dark (background), hide it completely.
-        if (val < 0.15) {
-            neuron.visible = false; 
-            neuron.material.opacity = 0;
-            neuron.material.emissiveIntensity = 0;
-        } else {
-            // If pixel is bright (text), show it clearly.
-            neuron.visible = true;
-            neuron.material.opacity = 1.0; // Make it solid
-            neuron.material.color.setHex(0xffffff); // White
-            neuron.material.emissive.setHex(0xffffff); // White Glow
-            neuron.material.emissiveIntensity = 1.5; 
-        }
-        
-        neuron.userData.isActive = val > 0.15;
-      } 
-      
+   if (lIdx === 0) {
+      if (val < 0.15) {
+        // BACKGROUND -> Solid Black
+        neuron.material.color.setHex(0x111111); // Dark Gray/Black
+        neuron.material.emissive.setHex(0x000000);
+        neuron.material.emissiveIntensity = 0;
+      } else {
+        // TEXT -> Solid White
+        neuron.material.color.setHex(0xffffff);
+        neuron.material.emissive.setHex(0xffffff);
+        neuron.material.emissiveIntensity = 0.5; // Mild glow
+      }
+      // No opacity changes needed because transparent = false
+    }
       // --- CASE 2: HIDDEN LAYERS (PULSING BRAIN) ---
       else {
         // Ensure hidden neurons are always visible (but dim)

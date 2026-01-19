@@ -5,6 +5,7 @@ import io
 import os
 import glob
 import random
+import torch
 from PIL import Image, ImageOps
 from src.inference import Predictor
 
@@ -50,7 +51,28 @@ async def predict(file: UploadFile = File(...)):
 
     # 3. Predict
     label, conf, _, _, _ = predictor.predict_with_heatmap(image_rgba)
-    features_flat = [feat.flatten().tolist() for feat in predictor.features]
+        # --- NEW WAY (Summary/Loudness) ---
+    features_summary = []
+    for f in predictor.features:
+        # f is a Tensor of shape [1, Channels, Height, Width]
+        # We want to average over Height and Width to get one number per Channel
+        
+        # 1. Remove batch dimension -> [Channels, H, W]
+        f_sq = f.squeeze(0) 
+        
+        # 2. Calculate Mean over dimensions 1 and 2 (H and W) -> [Channels]
+        # This gives us a list of 32 numbers for Block 1, 64 for Block 2, etc.
+        avgs = torch.mean(f_sq, dim=(1, 2))
+        
+        # 3. Normalize (Optional, but makes the visual pop more)
+        # It ensures the values are between 0 and 1 so they glow nicely
+        if avgs.max() > 0:
+            avgs = avgs / avgs.max()
+        features_summary.append(avgs.tolist())
+        
+        
+    # Return this instead of the flattened arrays
+    features_flat = features_summary
 
     return {
         "prediction": label,
