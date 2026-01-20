@@ -49,29 +49,36 @@ async def predict(file: UploadFile = File(...)):
     grayscale = np.mean(image_np, axis=2) / 255.0
     input_layer_flat = grayscale.flatten().tolist()
 
-    # 3. Predict
     label, conf, _, _, _ = predictor.predict_with_heatmap(image_rgba)
-        # --- NEW WAY (Summary/Loudness) ---
+
+    # --- THE ROBUST FIX ---
     features_summary = []
     for f in predictor.features:
-        # f is a Tensor of shape [1, Channels, Height, Width]
-        # We want to average over Height and Width to get one number per Channel
+        # f is the raw tensor from PyTorch
         
-        # 1. Remove batch dimension -> [Channels, H, W]
-        f_sq = f.squeeze(0) 
+        # Case A: It's a Convolutional Layer (Batch, Channels, Height, Width)
+        if f.dim() == 4:
+            # Squeeze removes Batch -> (Channels, Height, Width)
+            f_sq = f.squeeze(0) 
+            # Average over Height (1) and Width (2) to get intensity per Channel
+            avgs = torch.mean(f_sq, dim=(1, 2))
+            
+        # Case B: It's a Linear/Output Layer (Batch, Neurons)
+        elif f.dim() == 2:
+            # Squeeze removes Batch -> (Neurons)
+            # It's already flat, so we don't need to average anything!
+            avgs = f.squeeze(0)
         
-        # 2. Calculate Mean over dimensions 1 and 2 (H and W) -> [Channels]
-        # This gives us a list of 32 numbers for Block 1, 64 for Block 2, etc.
-        avgs = torch.mean(f_sq, dim=(1, 2))
-        
-        # 3. Normalize (Optional, but makes the visual pop more)
-        # It ensures the values are between 0 and 1 so they glow nicely
+        # Case C: Safety Fallback
+        else:
+            avgs = f.flatten()
+
+        # Normalize (0.0 to 1.0) so the visuals glow correctly
         if avgs.max() > 0:
             avgs = avgs / avgs.max()
+            
         features_summary.append(avgs.tolist())
         
-        
-    # Return this instead of the flattened arrays
     features_flat = features_summary
 
     return {
