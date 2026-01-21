@@ -30,7 +30,7 @@ const NETWORK_CONFIG = {
     { name: 'Block 2', neurons: 64, color: '#333333', position: 6 },
     { name: 'Block 3', neurons: 128, color: '#333333', position: 9 },
     { name: 'Block 4', neurons: 256, color: '#333333', position: 12 },
-    { name: 'Output', neurons: 237, color: '#333333', position: 15 }
+    // { name: 'Output', neurons: 237, color: '#333333', position: 15 }
   ]
 };
 
@@ -106,40 +106,60 @@ const NetworkVisualizer = () => {
   const [prediction, setPrediction] = useState(defaultPrediction);
   const [isDemoMode, setIsDemoMode] = useState(false);
 
-  const resetVisualState = () => {
+const resetVisualState = () => {
+    // 1. Neurons (Reset to Blue)
     neuronMeshesRef.current.flat().forEach(neuron => {
       neuron.userData.isActive = false;
-      neuron.userData.isFinalPath = false;
-      neuron.material.opacity = neuron.userData.baseOpacity ?? 0.25;
+      
+      // Default: Blue Glass
+      neuron.material.color.setHex(0x0044aa); 
+      neuron.material.emissive.setHex(0x000000);
       neuron.material.emissiveIntensity = 0;
-      neuron.material.color.set(neuron.userData.baseColor ?? new THREE.Color('#333333'));
+      
+      if (neuron.userData.layerIdx === 0) {
+          neuron.material.opacity = 0; 
+      } else {
+          neuron.material.opacity = 0.2; // Visible Structure
+      }
       neuron.scale.setScalar(1);
     });
 
+    // 2. Connections (Blue Web)
     connectionLinesRef.current.forEach(line => {
       line.userData.isActive = false;
-      line.material.opacity = line.userData.baseOpacity ?? 0.08;
-      line.material.color.setHex(0x4f46e5);
+      line.material.opacity = 0.03;
+      line.material.color.setHex(0x0044aa);
     });
 
-    charConnectionsRef.current.forEach(line => {
-      line.userData.isActive = false;
-      line.material.opacity = line.userData.baseOpacity ?? 0.05;
-      line.material.color.setHex(0x4f46e5);
-    });
-
+    // 3. Output Grid
     characterMeshesRef.current.forEach(char => {
-      char.material.opacity = 0.8;
+      char.material.opacity = 0.3;
+      char.material.color.setHex(0x445566);
+      char.scale.set(0.25, 0.25, 1);
+    });    
+
+    // ... (Keep connections/grid reset logic the same) ...
+    // Reset Connections to Invisible
+    connectionLinesRef.current.forEach(line => {
+      line.userData.isActive = false;
+      line.material.opacity = 0.02;
+      line.material.color.setHex(0x333333);
+    });
+
+    // Reset Character Grid
+    characterMeshesRef.current.forEach(char => {
+      char.material.opacity = 0.9;
       char.material.color.setHex(0xffffff);
       char.scale.set(0.25, 0.25, 1);
     });
-
     gridCellsRef.current.forEach(cell => {
-   cell.material.opacity = 0.6; // Back to visible frame
-      cell.material.color.setHex(0x666666);
+      cell.material.opacity = 0.5;
+      cell.material.color.setHex(0x888888);
+    });
+    charConnectionsRef.current.forEach(line => {
+        line.material.opacity = 0.0;
     });
   };
-
   const updateInputScreen = pixels => {
     if (!inputScreenRef.current) return;
 
@@ -170,38 +190,68 @@ const NetworkVisualizer = () => {
     inputScreenRef.current.material.needsUpdate = true;
   };
 
-  const highlightPredictedCharacter = summary => {
-    if (summary.index === null) return;
+const highlightPredictedCharacter = summary => {
+  if (summary.index == null) return;
 
-    characterMeshesRef.current.forEach((char, idx) => {
-      char.material.opacity = 0.3;
-      char.material.color.setHex(0xffffff);
-      char.scale.set(0.25, 0.25, 1);
+  /* ───────────── RESET ALL ───────────── */
+  characterMeshesRef.current.forEach((char, idx) => {
+    char.material.opacity = 0.25;
+    char.material.color.setHex(0xffffff);
+    char.scale.set(0.25, 0.25, 1);
+  });
 
-      if (summary.index === idx) {
-        char.material.opacity = 1;
-        char.material.color.setHex(0x00ffff);
-        char.scale.set(0.4, 0.4, 1);
-      }
-    });
+  gridCellsRef.current.forEach((cell, idx) => {
+    const solid = cell.userData.solid;
 
-    summary.top5.forEach((item, rank) => {
-      const char = characterMeshesRef.current[item.index];
-      if (!char) return;
-      const intensity = 0.5 + (0.5 * (5 - rank)) / 5;
-      char.material.opacity = intensity;
-    });
+    cell.material.opacity = 0.25;
+    cell.material.color.setHex(0xffffff);
 
-    charConnectionsRef.current.forEach(line => {
-      if (line.userData.targetCharIndex === summary.index) {
-        line.material.opacity = 0.8;
-        line.material.color.setHex(0x00ffff);
-      } else {
-        line.material.opacity = 0.02;
-        line.material.color.setHex(0x4f46e5);
-      }
-    });
-  };
+    if (solid) solid.material.opacity = 0.0;
+  });
+
+  charConnectionsRef.current.forEach(line => {
+    line.material.opacity = 0.0;
+  });
+
+  /* ───────────── WINNER (PRIMARY) ───────────── */
+  const winnerChar = characterMeshesRef.current[summary.index];
+  const winnerCell = gridCellsRef.current[summary.index];
+
+  if (winnerChar && winnerCell) {
+    winnerChar.material.opacity = 1.0;
+    winnerChar.material.color.setHex(0x00ffff);
+    winnerChar.scale.set(0.42, 0.42, 1);
+
+    winnerCell.material.opacity = 1.0;
+    winnerCell.material.color.setHex(0x00ffff);
+    winnerCell.userData.solid.material.opacity = 0.35;
+  }
+
+  /* ───────────── TOP-5 (SECONDARY SIGNALS) ───────────── */
+  summary.top5.forEach((item, rank) => {
+    const char = characterMeshesRef.current[item.index];
+    const cell = gridCellsRef.current[item.index];
+
+    if (!char || !cell) return;
+
+    const strength = (5 - rank) / 5; // 1 → 0.2
+    const opacity = 0.35 + strength * 0.4;
+
+    char.material.opacity = opacity;
+    char.material.color.setHex(0x9ffcff);
+    char.scale.set(0.28 + strength * 0.08, 0.28 + strength * 0.08, 1);
+
+    cell.material.opacity = opacity;
+  });
+
+  /* ───────────── CONNECTIONS (ONLY WINNER) ───────────── */
+  charConnectionsRef.current.forEach(line => {
+    if (line.userData.targetCharIndex === summary.index) {
+      line.material.opacity = 0.85;
+      line.material.color.setHex(0x00ffff);
+    }
+  });
+};
 
   const highlightDecisionPath = () => {
     const data = modelDataRef.current;
@@ -238,49 +288,45 @@ const updateDramaticAnimation = () => {
     const data = modelDataRef.current;
     if (!data || !data.featuresFlat) return;
 
-    // NO TIME CALCULATIONS. JUST RENDER.
-
     const numLayers = neuronMeshesRef.current.length;
 
     // 1. RENDER NEURONS
     neuronMeshesRef.current.forEach((layerNeurons, lIdx) => {
       const features = data.featuresFlat[lIdx] || [];
 
-      // --- INPUT LAYER ---
+      // INPUT LAYER (Handled by Screen, just set anchors)
       if (lIdx === 0) {
-        // Input is handled by the Holographic Screen texture, 
-        // but we ensure the "Anchors" are set correctly for lines
         layerNeurons.forEach((neuron, nIdx) => {
            const val = features[nIdx] ?? 0;
-           neuron.userData.isActive = val > 0.1; // Threshold for connections
+           neuron.userData.isActive = val > 0.1;
         });
         return;
       }
 
-      // --- OUTPUT LAYER (Winner Takes All) ---
+      // --- OUTPUT LAYER (GREEN POP) ---
       if (lIdx === numLayers - 1) {
         layerNeurons.forEach((neuron, nIdx) => {
           const isWinner = predictionRef.current?.index === nIdx;
           const isTop5 = predictionRef.current?.top5.some(t => t.index === nIdx);
 
           if (isWinner) {
-            // WINNER: Bright White
-            neuron.material.color.setHex(0xffffff);
-            neuron.material.emissive.setHex(0xffffff);
-            neuron.material.emissiveIntensity = 2.0;
+            // WINNER: NEON GREEN
+            neuron.material.color.setHex(0x00ff88);
+            neuron.material.emissive.setHex(0x00ff88);
+            neuron.material.emissiveIntensity = 3.0; // Blindingly bright
             neuron.material.opacity = 1.0;
-            neuron.scale.setScalar(1.5);
+            neuron.scale.setScalar(1.8);
             neuron.userData.isActive = true;
           } else if (isTop5) {
-            // RUNNER UP: Dim Grey
-            neuron.material.color.setHex(0x888888);
-            neuron.material.emissive.setHex(0x444444);
+            // TOP 5: White
+            neuron.material.color.setHex(0xffffff);
+            neuron.material.emissive.setHex(0xffffff);
             neuron.material.emissiveIntensity = 0.5;
-            neuron.material.opacity = 0.5;
-            neuron.scale.setScalar(1.0);
+            neuron.material.opacity = 0.6;
+            neuron.scale.setScalar(1.2);
             neuron.userData.isActive = false;
           } else {
-            // OFF
+            // LOSERS: Dark
             neuron.material.color.setHex(0x111111);
             neuron.material.emissiveIntensity = 0;
             neuron.material.opacity = 0.1;
@@ -291,132 +337,138 @@ const updateDramaticAnimation = () => {
         return;
       }
 
-      // --- HIDDEN LAYERS (Threshold) ---
+      // --- HIDDEN LAYERS (WHITE/SILVER POP) ---
       layerNeurons.forEach((neuron, nIdx) => {
         const val = Math.abs(features[nIdx] ?? 0);
-        // Instant Threshold Check
-        if (val > 0.05) {
+        
+        if (val > 0.1) {
           neuron.userData.isActive = true;
-          
-          // STATIC GLOW (White/Silver)
+          // ACTIVE: BRIGHT WHITE
           neuron.material.emissive.setHex(0xffffff);
           neuron.material.color.setHex(0xffffff);
-          neuron.material.emissiveIntensity = 1.0; 
-          neuron.material.opacity = 0.8;
+          neuron.material.emissiveIntensity = 2.0; 
+          neuron.material.opacity = 1.0; 
         } else {
           neuron.userData.isActive = false;
+          // INACTIVE: DIM GREY CLOUD (Visible)
           neuron.material.emissiveIntensity = 0;
-          neuron.material.color.setHex(0x222222);
-          neuron.material.opacity = 0.1; // Faint background
+          neuron.material.color.setHex(0x333333); // Grey
+          neuron.material.opacity = 0.12;         // Visible dimness
         }
       });
     });
 
-    // 2. RENDER CONNECTIONS (Instant Lines)
+    // 2. RENDER CONNECTIONS (White Beams)
     connectionLinesRef.current.forEach(line => {
       const lIdx = line.userData.layerIdx;
       const src = neuronMeshesRef.current[lIdx]?.[line.userData.sourceIdx];
       
-      // If Source is Active, Draw the Line.
       if (src?.userData.isActive) {
           const intensity = src.material.emissiveIntensity;
-          
-          // Solid White/Cyan Beam
-          line.material.opacity = lIdx === 0 ? 0.3 : 0.4; // Input beam vs hidden web
-          line.material.color.setHex(0xffffff);
+          line.material.opacity = lIdx === 0 ? 0.3 : 0.4;
+          line.material.color.setHex(0xffffff); // Pure White lines
       } else {
-          // Hide
           line.material.opacity = 0.01;
           line.material.color.setHex(0x333333);
       }
     });
 
-    // 3. RENDER OUTPUT GRID & BEAM
+    // 3. RENDER OUTPUT GRID (Green Text)
     const summary = predictionRef.current;
     
-    // Highlight Character
     characterMeshesRef.current.forEach((char, idx) => {
         if (idx === summary.index) {
             char.material.opacity = 1.0;
-            char.material.color.setHex(0xffffff);
-            char.scale.set(0.5, 0.5, 1);
+            char.material.color.setHex(0x00ff88); // Green Text
+            char.scale.set(0.6, 0.6, 1);
         } else {
-            char.material.opacity = 0.2; // Dim others
+            char.material.opacity = 0.2;
             char.material.color.setHex(0x444444);
             char.scale.set(0.25, 0.25, 1);
         }
     });
 
-    // Highlight Final Wires
     charConnectionsRef.current.forEach(line => {
         if (line.userData.targetCharIndex === summary.index) {
             line.material.opacity = 0.8;
-            line.material.color.setHex(0xffffff); // Solid White Beam
+            line.material.color.setHex(0x00ff88); // Green Beam
         } else {
             line.material.opacity = 0.0;
         }
     });
   };
-  const createNeuronLayer = (layer, layerIdx) => {
+const createNeuronLayer = (layer, layerIdx) => {
     const neurons = [];
-
+    
+    // --- INPUT LAYER (Keep as Anchors for Screen) ---
     if (layerIdx === 0) {
-      const cols = 28;
-      const spacing = 0.18;
-      const vOffset = (28 * spacing) / 2;
-      const hOffset = (28 * spacing) / 2;
+        const cols = 28; const spacing = 0.18;
+        const vOffset = (28 * spacing) / 2; const hOffset = (28 * spacing) / 2;
+        for (let i = 0; i < layer.neurons; i++) {
+            const row = Math.floor(i / cols); const col = i % cols;
+            const x = layer.position; 
+            const y = ((27-row)*spacing) - vOffset; const z = (col*spacing) - hOffset;
+            // Invisible anchors
+            const neuron = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,0.1), new THREE.MeshBasicMaterial({visible:false}));
+            neuron.position.set(x,y,z); neuron.userData = {layerIdx, neuronIdx:i};
+            neurons.push(neuron);
+        }
+    } 
+    // --- HIDDEN LAYERS (CONTROLLED CLUSTERS) ---
+    else if (layerIdx < NETWORK_CONFIG.layers.length - 1) {
+        
+        // DENSITY: 4 Cubes per Neuron (Complex but clean)
+        const CLUSTER_SIZE = 4; 
+        
+        const gridSize = Math.ceil(Math.sqrt(layer.neurons));
+        const spacing = 0.35; // Slightly wider spacing between clusters
+        const offset = (gridSize - 1) * spacing / 2;
 
-      for (let i = 0; i < layer.neurons; i += 1) {
-        const row = Math.floor(i / cols);
-        const col = i % cols;
+        for (let i = 0; i < layer.neurons; i++) {
+            const row = Math.floor(i / gridSize); const col = i % gridSize;
+            const baseX = layer.position;
+            const baseY = row * spacing - offset;
+            const baseZ = col * spacing - offset;
 
-        const x = layer.position;
-        const y = (27 - row) * spacing - vOffset;
-        const z = col * spacing - hOffset;
+            for (let j = 0; j < CLUSTER_SIZE; j++) {
+                // TIGHT SCATTER: Keep them close to the center (0.2 spread)
+                // This ensures the connection lines actually hit them
+                const x = baseX + (Math.random() - 0.5) * 0.4; 
+                const y = baseY + (Math.random() - 0.5) * 0.2;
+                const z = baseZ + (Math.random() - 0.5) * 0.2;
 
-        const geometry = new THREE.BoxGeometry(0.05, 0.17, 0.17);
-        const material = new THREE.MeshStandardMaterial({
-          color: 0x000000,
-          roughness: 0.4,
-          metalness: 0.1,
-          transparent: false,
-          visible: false,
-          opacity: 1.0
-        });
+                // SIZE: 0.14 (Chunky, visible blocks)
+                const geometry = new THREE.BoxGeometry(0.14, 0.14, 0.14);
+                
+                // IDLE COLOR: Deep Glassy Blue
+                const material = new THREE.MeshStandardMaterial({
+                    color: 0x0044aa,      // Deep Blue
+                    emissive: 0x001133,   // Faint glow
+                    roughness: 0.2,
+                    metalness: 0.8,
+                    transparent: true,
+                    opacity: 0.3          // Visible glass look
+                });
 
-        const neuron = new THREE.Mesh(geometry, material);
-        neuron.position.set(x, y, z);
-        neuron.userData = { layerIdx, neuronIdx: i, baseColor: new THREE.Color(layer.color), baseOpacity: 0.25 };
-        neurons.push(neuron);
-      }
-      return neurons;
+                const neuron = new THREE.Mesh(geometry, material);
+                neuron.position.set(x, y, z);
+                neuron.userData = { layerIdx, neuronIdx: i }; 
+                neurons.push(neuron);
+            }
+        }
     }
-
-    const gridSize = Math.ceil(Math.sqrt(layer.neurons));
-    const spacing = 0.28;
-    const offset = ((gridSize - 1) * spacing) / 2;
-
-    for (let i = 0; i < layer.neurons; i += 1) {
-      const row = Math.floor(i / gridSize);
-      const col = i % gridSize;
-      const x = layer.position;
-      const y = row * spacing - offset;
-      const z = col * spacing - offset;
-
-      const geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12);
-      const material = new THREE.MeshStandardMaterial({
-        color: layer.color,
-        emissive: 0x000000,
-        transparent: true,
-        opacity: 0.25
-      });
-
-      const neuron = new THREE.Mesh(geometry, material);
-      neuron.position.set(x, y, z);
-      neuron.userData = { layerIdx, neuronIdx: i, baseColor: new THREE.Color(layer.color), baseOpacity: 0.25 };
-      neurons.push(neuron);
+    // --- OUTPUT LAYER (Solid Grid) ---
+    else {
+        const gridSize = Math.ceil(Math.sqrt(layer.neurons));
+        const spacing = 0.28; const offset = (gridSize-1)*spacing/2;
+        for (let i = 0; i < layer.neurons; i++) {
+            const row = Math.floor(i/gridSize); const col = i%gridSize;
+            const x = layer.position; const y = row*spacing - offset; const z = col*spacing - offset;
+            const neuron = new THREE.Mesh(new THREE.BoxGeometry(0.12,0.12,0.12), new THREE.MeshStandardMaterial({color:0x222222, transparent:true, opacity:0.3}));
+            neuron.position.set(x,y,z); neuron.userData = {layerIdx, neuronIdx:i};
+            neurons.push(neuron);
+        }
     }
-
     return neurons;
   };
 
@@ -493,70 +545,121 @@ const updateDramaticAnimation = () => {
     sprite.scale.set(2.5, 0.6, 1);
     scene.add(sprite);
   };
+const buildCharacterGrid = (scene) => {
+  const gridCols = 16;
+  const spacing = 0.35;
 
- const buildCharacterGrid = (scene) => {
-    const gridCols = 16;
-    const gridRows = Math.ceil(CHARACTERS.length / gridCols);
-    const spacing = 0.35;
-    const finalLayerX = NETWORK_CONFIG.layers[NETWORK_CONFIG.layers.length-1].position;
-    const gridX = finalLayerX + 6;
-    const offsetY = ((gridRows - 1) * spacing) / 2;
-    const offsetZ = ((gridCols - 1) * spacing) / 2;
+  const gridX =
+    NETWORK_CONFIG.layers[NETWORK_CONFIG.layers.length - 1].position + 8;
 
-    CHARACTERS.forEach((char, idx) => {
-        const row = Math.floor(idx / gridCols);
-        const col = idx % gridCols;
-        const x = gridX;
-        const y = row * spacing - offsetY;
-        const z = col * spacing - offsetZ;
+  const gridRows = Math.ceil(CHARACTERS.length / gridCols);
+  const offsetY = ((gridRows - 1) * spacing) / 2;
+  const offsetZ = ((gridCols - 1) * spacing) / 2;
 
-        // 1. GRID BOXES: Make them stronger (Opacity 0.6)
-        const boxGeo = new THREE.BoxGeometry(0.05, spacing * 0.9, spacing * 0.9);
-        const edges = new THREE.EdgesGeometry(boxGeo);
-        // Brighten color to 0x666666 and opacity to 0.6
-        const lineMat = new THREE.LineBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.6 });
-        const cellFrame = new THREE.LineSegments(edges, lineMat);
-        cellFrame.position.set(x, y, z);
-        cellFrame.userData = { baseOpacity: 0.6 }; // Save this so we reset to 0.6 later
-        scene.add(cellFrame);
-        gridCellsRef.current.push(cellFrame);
+  CHARACTERS.forEach((char, idx) => {
+    const row = Math.floor(idx / gridCols);
+    const col = idx % gridCols;
 
-        // 2. CHARACTERS: Make them visible (Opacity 0.8)
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        canvas.width = 128; canvas.height = 128;
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 90px Arial'; // Slightly bigger font
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(char, 64, 64);
-        
-        const texture = new THREE.CanvasTexture(canvas);
-        // Start visible (0.8) and brighter color
-        const material = new THREE.SpriteMaterial({ map: texture, opacity: 0.8, color: 0xaaaaaa });
-        const sprite = new THREE.Sprite(material);
-        sprite.position.set(x + 0.1, y, z); // Push slightly forward
-        sprite.scale.set(0.25, 0.25, 1);
-        scene.add(sprite);
-        characterMeshesRef.current.push(sprite);
+    const x = gridX;
+    const y = row * spacing - offsetY;
+    const z = col * spacing - offsetZ;
 
-        // 3. HIGHLIGHT BEAM: Increase wires (15 -> 60)
-        const finalNeurons = neuronMeshesRef.current[neuronMeshesRef.current.length-1];
-        // Create 60 lines per character for a thick beam
-        const connectionsPerChar = 60; 
-        
-        for(let i=0; i < connectionsPerChar; i++) { 
-            const nIdx = Math.floor(Math.random() * finalNeurons.length);
-            const neuron = finalNeurons[nIdx];
-            const pts = [neuron.position, new THREE.Vector3(x,y,z)];
-            const geo = new THREE.BufferGeometry().setFromPoints(pts);
-            const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
-            const line = new THREE.Line(geo, mat);
-            line.userData = { targetCharIndex: idx };
-            scene.add(line);
-            charConnectionsRef.current.push(line);
-        }
+    /* ───────────── GRID OUTLINE (UI LAYER) ───────────── */
+    const edges = new THREE.EdgesGeometry(
+      new THREE.BoxGeometry(0.05, spacing * 0.9, spacing * 0.9)
+    );
+
+    const cellMaterial = new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.3,
+      depthTest: false,
+      depthWrite: false
     });
-  };
+
+    const cell = new THREE.LineSegments(edges, cellMaterial);
+    cell.position.set(x + 0.01, y, z);
+    cell.renderOrder = 10;
+    cell.userData = { index: idx };
+    scene.add(cell);
+    gridCellsRef.current.push(cell);
+
+    /* ───────────── SOLID SELECTION PLATE ───────────── */
+    const solidMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.0,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    const solidBox = new THREE.Mesh(
+      new THREE.BoxGeometry(0.048, spacing * 0.9, spacing * 0.9),
+      solidMaterial
+    );
+
+    solidBox.position.set(x + 0.009, y, z);
+    solidBox.renderOrder = 9;
+    scene.add(solidBox);
+    cell.userData.solid = solidBox;
+
+    /* ───────────── CHARACTER TEXT (TOP UI) ───────────── */
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = 128;
+    canvas.height = 128;
+
+    ctx.clearRect(0, 0, 128, 128);
+    ctx.fillStyle = "white";
+    ctx.font = "bold 90px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(char, 64, 64);
+
+    const spriteMaterial = new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(canvas),
+      color: 0xffffff,
+      transparent: true,
+      opacity: 1.0,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    const sprite = new THREE.Sprite(spriteMaterial);
+    sprite.position.set(x + 0.02, y, z);
+    sprite.scale.set(0.25, 0.25, 1);
+    sprite.renderOrder = 11;
+    scene.add(sprite);
+    characterMeshesRef.current.push(sprite);
+
+    /* ───────────── CONNECTIONS FROM FINAL LAYER ───────────── */
+    const finalNeurons =
+      neuronMeshesRef.current[neuronMeshesRef.current.length - 1];
+
+    for (let i = 0; i < 60; i++) {
+      const n =
+        finalNeurons[Math.floor(Math.random() * finalNeurons.length)];
+
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          n.position,
+          new THREE.Vector3(x, y, z)
+        ]),
+        new THREE.LineBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.0
+        })
+      );
+
+      line.userData = { targetCharIndex: idx };
+      scene.add(line);
+      charConnectionsRef.current.push(line);
+    }
+  });
+};
+
   const buildNeuralNetwork = scene => {
     NETWORK_CONFIG.layers.forEach((layer, idx) => {
       const neurons = createNeuronLayer(layer, idx);
@@ -598,7 +701,6 @@ const updateDramaticAnimation = () => {
       createLayerLabel(scene, layer);
     });
   };
-
 const processModelResponse = data => {
     // 1. Process Data
     const rawFeatures = Array.isArray(data?.features)
@@ -617,7 +719,8 @@ const processModelResponse = data => {
     predictionRef.current = summary;
     
     // 4. Trigger Instant Render
-    // We skip 'animating' and go straight to 'complete'
+    renderActiveNetwork(); // <--- ADD THIS LINE HERE
+    
     stageRef.current = 'complete'; 
     setAnimationStage('complete'); 
     setPrediction(summary);
@@ -656,9 +759,8 @@ const processModelResponse = data => {
 
     // 1. Scene Setup (Darker, cleaner background)
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x050505); 
-    // Use Exponential Fog for smoother fade-out
-    scene.fog = new THREE.FogExp2(0x050505, 0.02);
+    scene.background = new THREE.Color(0x02040a); 
+    scene.fog = new THREE.FogExp2(0x02040a, 0.02);
     sceneRef.current = scene;
 
     // 2. Camera
@@ -685,7 +787,7 @@ const processModelResponse = data => {
     
     // FORCE AUTO ROTATE
     controls.autoRotate = true; 
-    controls.autoRotateSpeed = 2.0; // Increased speed
+    controls.autoRotateSpeed = 4.0; // Increased speed
     controlsRef.current = controls;
 
     // 5. Lights (Updated to WHITE/SILVER)
@@ -705,12 +807,12 @@ const processModelResponse = data => {
     scene.add(fillLight);
 
     // 6. Grid (Subtle Grey)
-    const gridHelper = new THREE.GridHelper(100, 100, 0x333333, 0x111111);
-    gridHelper.position.set(10, -10, 0);
+    const gridHelper = new THREE.GridHelper(200, 100, 0x4f46e5, 0x333333);
+    
+    gridHelper.position.set(10, -10, 0); // Lowered to -10
     gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.4;
+    gridHelper.material.opacity = 0.3;
     scene.add(gridHelper);
-
     // 7. Build Scene
     buildNeuralNetwork(scene);
     buildCharacterGrid(scene);
@@ -726,7 +828,7 @@ const processModelResponse = data => {
       // CRITICAL: Always run the visualizer update if data exists
       // Removed the 'if animating' check so "Instant" mode works
       if (modelDataRef.current) {
-         updateDramaticAnimation();
+         renderActiveNetwork();
       }
       
       renderer.render(scene, camera);
@@ -810,224 +912,191 @@ const processModelResponse = data => {
     };
   }, [isDemoMode]);
 
+ const renderActiveNetwork = () => {
+  const data = modelDataRef.current;
+  if (!data || !data.featuresFlat) return;
+
+  const numLayers = neuronMeshesRef.current.length;
+
+  // 1. NEURONS
+  neuronMeshesRef.current.forEach((layerNeurons, lIdx) => {
+    const features = data.featuresFlat[lIdx] || [];
+
+    // INPUT LAYER
+    if (lIdx === 0) {
+      layerNeurons.forEach((neuron, nIdx) => {
+        const val = features[nIdx] ?? 0;
+        neuron.userData.isActive = val > 0.1;
+      });
+      return;
+    }
+
+    // OUTPUT LAYER (WINNER)
+    if (lIdx === numLayers - 1) {
+      layerNeurons.forEach((neuron, nIdx) => {
+        const isWinner = predictionRef.current?.index === nIdx;
+
+        if (isWinner) {
+          // ELECTRIC CORE
+          neuron.material.color.setHex(0xe6ffff);
+          neuron.material.emissive.setHex(0x00ffff);
+          neuron.material.emissiveIntensity = 3.2;
+          neuron.material.opacity = 1.0;
+          neuron.scale.setScalar(1.8);
+          neuron.userData.isActive = true;
+        } else {
+          // IDLE OUTPUT
+          neuron.material.color.setHex(0x0044aa);
+          neuron.material.emissive.setHex(0x000000);
+          neuron.material.emissiveIntensity = 0;
+          neuron.material.opacity = 1.0;
+          neuron.scale.setScalar(1.0);
+          neuron.userData.isActive = false;
+        }
+      });
+      return;
+    }
+
+    // HIDDEN LAYERS
+    layerNeurons.forEach((neuron, nIdx) => {
+      const val = Math.abs(features[nIdx] ?? 0);
+
+      if (val > 0.1) {
+        // ACTIVE SIGNAL (CYAN)
+        neuron.userData.isActive = true;
+        neuron.material.color.setHex(0x33ccff);
+        neuron.material.emissive.setHex(0x00ffff);
+        neuron.material.emissiveIntensity = 1.2;
+        neuron.material.opacity = 0.85;
+      } else {
+        // IDLE STRUCTURE
+        neuron.userData.isActive = false;
+        neuron.material.color.setHex(0x0044aa);
+        neuron.material.emissiveIntensity = 0;
+        neuron.material.opacity = 0.55;
+      }
+    });
+  });
+
+  // 2. CONNECTIONS
+  connectionLinesRef.current.forEach(line => {
+    const lIdx = line.userData.layerIdx;
+    const src = neuronMeshesRef.current[lIdx]?.[line.userData.sourceIdx];
+
+    if (src?.userData.isActive) {
+      // ELECTRIC BEAM
+      line.material.color.setHex(0x33ccff);
+      line.material.opacity = 0.6;
+    } else {
+      // IDLE WEB
+      line.material.color.setHex(0x0044aa);
+      line.material.opacity = 0.25;
+    }
+  });
+
+  // 3. FINAL OUTPUT TEXT
+  const summary = predictionRef.current;
+
+  characterMeshesRef.current.forEach((char, idx) => {
+    if (idx === summary.index) {
+      char.material.color.setHex(0x00ffff);
+      char.material.opacity = 1.0;
+      char.scale.set(0.6, 0.6, 1);
+    } else {
+      char.material.color.setHex(0x445566);
+      char.material.opacity = 0.3;
+      char.scale.set(0.25, 0.25, 1);
+    }
+  });
+
+  charConnectionsRef.current.forEach(line => {
+    if (line.userData.targetCharIndex === summary.index) {
+      line.material.color.setHex(0x33ccff);
+      line.material.opacity = 0.8;
+    } else {
+      line.material.opacity = 0.0;
+    }
+  });
+};
+
 return (
     <div style={{ 
       width: '100%', height: '100vh', background: '#050505',
       position: 'relative', overflow: 'hidden',
-      fontFamily: '"SF Mono", "Fira Code", monospace', // Tech font
+      fontFamily: '"SF Mono", "Fira Code", monospace',
       userSelect: 'none'
     }}>
       
-      {/* 0. THE 3D SCENE */}
       <div ref={mountRef} style={{ width: '100%', height: '100%', zIndex: 0 }} />
 
-      {/* =========================================================
-          1. TOP LEFT: CONTROL STATION (Input)
-      ========================================================= */}
-      <div style={{
-        position: 'absolute', top: '30px', left: '30px', zIndex: 10,
-        width: '280px',
-        background: 'rgba(0, 0, 0, 0.85)',
-        border: '1px solid rgba(255, 255, 255, 0.2)',
-        borderRadius: '12px',
-        padding: '20px',
-        backdropFilter: 'blur(20px)',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.5)'
+      {/* --- TOP LEFT: INPUT (CLEANER) --- */}
+      {/* <div style={{
+        position: 'absolute', top: 30, left: 30, zIndex: 10,
+        width: 340, background: 'rgba(10,10,10,0.85)', 
+        border: '1px solid #333', borderRadius: 8, padding: 20,
+        backdropFilter: 'blur(10px)'
       }}>
-        <div style={{ 
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
-          marginBottom: '15px', borderBottom: '1px solid rgba(255,255,255,0.1)',
-          paddingBottom: '10px'
-        }}>
-          <span style={{ color: '#fff', fontSize: '12px', fontWeight: 'bold', letterSpacing: '2px' }}>
-            ● INPUT SOURCE
-          </span>
-          <span style={{ color: '#666', fontSize: '10px' }}>28x28px</span>
+        <div style={{fontSize: 10, color: '#666', marginBottom: 15, letterSpacing: 1}}>INPUT // 28x28 TENSOR</div>
+        
+        <div style={{display:'flex', justifyContent:'center', marginBottom: 20}}>
+            <CanvasDraw 
+                ref={canvasRef} 
+                brushColor="#FFF" 
+                backgroundColor="#000" 
+                canvasWidth={300}  
+                canvasHeight={300} 
+                brushRadius={18} // HARDCODED THICK BRUSH
+                style={{border:'1px solid #222', cursor: 'crosshair'}} 
+            />
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '15px' }}>
-          <CanvasDraw
-            ref={canvasRef}
-            brushColor="#FFFFFF"
-            backgroundColor="#000000"
-            brushRadius={6}
-            lazyRadius={0}
-            canvasWidth={240}
-            canvasHeight={240}
-            style={{ border: '1px solid #333', borderRadius: '4px' }}
-          />
+        {/* SLIDER COMMENTED OUT
+        <div style={{marginBottom: 15, display:'flex', alignItems:'center', gap: 10}}> ... </div>
+        
+        
+        <div style={{display:'flex', gap: 10}}>
+            <button onClick={handlePredict} style={{
+                flex: 2, background: '#fff', color:'black', border:'none', 
+                padding: '12px 0', fontWeight:'bold', fontSize: 12, cursor:'pointer', borderRadius: 4, letterSpacing: 1
+            }}>RUN ANALYSIS</button>
+            <button onClick={() => canvasRef.current.clear()} style={{
+                flex: 1, background: 'transparent', color:'white', border:'1px solid #444', 
+                padding: '12px 0', fontSize: 12, cursor:'pointer', borderRadius: 4
+            }}>CLEAR</button>
         </div>
+      </div> */}
 
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button
-            onClick={handlePredict}
-            style={{
-              flex: 2, padding: '12px',
-              background: '#ffffff', color: '#000', // High Contrast
-              border: 'none', borderRadius: '6px',
-              cursor: 'pointer', fontWeight: 'bold', fontSize: '12px', letterSpacing: '1px',
-              transition: 'transform 0.1s'
-            }}
-            onMouseDown={e => e.target.style.transform = 'scale(0.95)'}
-            onMouseUp={e => e.target.style.transform = 'scale(1.0)'}
-          >
-            RUN ANALYSIS
+      {/* --- TOP CENTER: HEADER --- */}
+      <div style={{position: 'absolute', top: 30, left: '50%', transform: 'translateX(-50%)', display:'flex', alignItems:'center', gap:15, background:'rgba(5,5,5,0.85)', border:'1px solid rgba(255,255,255,0.15)', padding:'12px 30px', borderRadius:50, backdropFilter:'blur(20px)', zIndex: 10}}>
+          <div style={{background:'#fff', color:'#000', width:32, height:32, borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:'bold'}}>ፊ</div>
+          <div><div style={{color:'#fff', fontSize:14, fontWeight:'bold', letterSpacing:2}}>AMHARIC NEURAL RECOGNITION</div><div style={{color:'rgba(255,255,255,0.4)', fontSize:10, letterSpacing:1}}>REAL-TIME OPTICAL CHARACTER DETECTION</div></div>
+      </div>
+
+      {/* --- TOP RIGHT: STATS --- */}
+      <div style={{position: 'absolute', top: 30, right: 30, zIndex: 10, textAlign: 'right'}}>
+        <div style={{color: '#fff', fontWeight: 'bold', fontSize: 14}}>ETHIOPIC.AI <span style={{color:'green'}}>●</span></div>
+        <div style={{fontSize: 10, color: '#666', marginTop: 4}}>DATASET: 237 CLASSES</div>
+        <div style={{fontSize: 10, color: '#666', marginTop: 2}}>LAYERS: 6 DEPTH</div>
+      </div>
+
+      {/* --- BOTTOM CENTER: RESULTS (HIDDEN / COMMENTED OUT) --- */}
+      {/* 
+      {prediction.label !== '—' && (
+        <div style={{ ... }}>
+            ... (Percentage and Top 3 Table) ...
+        </div>
+      )}
+      */}
+
+      {/* --- BOTTOM RIGHT: DEMO BUTTON --- */}
+      <div style={{position: 'absolute', bottom: 30, right: 30, zIndex: 10}}>
+          <button onClick={() => setIsDemoMode(!isDemoMode)} style={{background: isDemoMode ? '#00ff88' : 'black', color: isDemoMode ? 'black' : 'white', border: '1px solid #333', padding: '10px 20px', fontSize: 11, cursor: 'pointer', fontWeight: 'bold', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 8}}>
+              <div style={{width: 6, height: 6, borderRadius: '50%', background: isDemoMode ? 'black' : 'red'}} />
+              {isDemoMode ? 'AUTO-PILOT ON' : 'PLAY DATASET'}
           </button>
-          <button
-            onClick={handleClear}
-            style={{
-              flex: 1, padding: '12px',
-              background: 'transparent', color: '#fff',
-              border: '1px solid #444', borderRadius: '6px',
-              cursor: 'pointer', fontSize: '12px'
-            }}
-          >
-            CLEAR
-          </button>
-        </div>
-      </div>
-
-      {/* =========================================================
-          2. TOP RIGHT: SYSTEM STATS (Data Feed)
-      ========================================================= */}
-      <div style={{
-        position: 'absolute', top: '30px', right: '30px', zIndex: 10,
-        textAlign: 'right', pointerEvents: 'none'
-      }}>
-        <div style={{ 
-          color: '#fff', fontSize: '16px', fontWeight: 'bold', letterSpacing: '1px', marginBottom: '8px' 
-        }}>
-          ETHIOPIC.AI <span style={{ color: '#444' }}>//</span> V2.0
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: '#888' }}>
-          <div>
-            ACTIVE NODES: <span style={{ color: '#fff' }}>{prediction.activeCount || 0}</span>
-          </div>
-          <div>
-            LAYERS: <span style={{ color: '#fff' }}>{NETWORK_CONFIG.layers.length}</span>
-          </div>
-          <div>
-            CONFIDENCE: <span style={{ color: '#fff' }}>{prediction.prob || 0}%</span>
-          </div>
-          <div style={{ marginTop: '8px', padding: '4px 8px', background: '#111', border: '1px solid #333', borderRadius: '4px', display: 'inline-block' }}>
-            STATUS: <span style={{ color: animationStage === 'animating' ? '#00ffff' : '#00ff88' }}>
-              {animationStage === 'animating' ? 'PROCESSING...' : 'ONLINE'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* =========================================================
-          3. BOTTOM CENTER: PREDICTION RESULT (The Hero)
-      ========================================================= */}
-      <div style={{
-        position: 'absolute', bottom: '40px', left: '50%', transform: 'translateX(-50%)',
-        zIndex: 10, textAlign: 'center', pointerEvents: 'none',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px'
-      }}>
-        {/* Only show label if we have a prediction */}
-        {prediction.label !== '—' && (
-          <>
-            <div style={{ 
-              fontSize: '10px', color: '#666', letterSpacing: '4px', textTransform: 'uppercase' 
-            }}>
-              Identified Character
-            </div>
-            <div style={{
-              fontSize: '80px', fontWeight: 'bold', color: '#fff', lineHeight: '1',
-              textShadow: '0 0 30px rgba(255,255,255,0.3)'
-            }}>
-              {prediction.label}
-            </div>
-            <div style={{ 
-              fontSize: '12px', color: '#00ffff', border: '1px solid rgba(0,255,255,0.3)', 
-              padding: '4px 12px', borderRadius: '20px', background: 'rgba(0,255,255,0.05)'
-            }}>
-              {prediction.prob}% MATCH
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* =========================================================
-          4. BOTTOM RIGHT: CONTROLS & HINTS
-      ========================================================= */}
-      <div style={{
-        position: 'absolute', bottom: '30px', right: '30px', zIndex: 10,
-        display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '15px'
-      }}>
-        {/* Hint */}
-        <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px' }}>
-          [ Scroll to Zoom • Drag to Rotate ]
-        </div>
-
-        {/* Play Button */}
-        <button
-          onClick={() => setIsDemoMode(!isDemoMode)}
-          style={{
-            background: isDemoMode ? 'rgba(0,255,255,0.1)' : 'rgba(0,0,0,0.6)',
-            color: isDemoMode ? '#00ffff' : '#fff',
-            border: isDemoMode ? '1px solid #00ffff' : '1px solid #444',
-            padding: '12px 24px',
-            fontSize: '12px', letterSpacing: '1px',
-            cursor: 'pointer', borderRadius: '4px',
-            backdropFilter: 'blur(5px)',
-            display: 'flex', alignItems: 'center', gap: '8px',
-            transition: 'all 0.3s ease'
-          }}
-        >
-          <span style={{ 
-            display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', 
-            background: isDemoMode ? '#00ffff' : '#666' 
-          }}></span>
-          {isDemoMode ? 'AUTO-PILOT ACTIVE' : 'PLAY DATASET'}
-        </button>
-      </div>
-
-      
-{/* =========================================================
-          5. TOP CENTER: HEADER (Floating Pill Navbar)
-      ========================================================= */}
-      <div style={{
-        position: 'absolute', top: '30px', left: '50%', transform: 'translateX(-50%)',
-        zIndex: 10,
-        display: 'flex', alignItems: 'center', gap: '15px',
-        background: 'rgba(5, 5, 5, 0.85)',
-        border: '1px solid rgba(255, 255, 255, 0.15)',
-        padding: '12px 30px',
-        borderRadius: '50px', // "Pill" shape
-        backdropFilter: 'blur(20px)',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.6)'
-      }}>
-        {/* Logo / Icon */}
-        <div style={{ 
-          background: '#fff', color: '#000', 
-          width: '32px', height: '32px', borderRadius: '50%', 
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '16px', fontWeight: 'bold'
-        }}>
-          ፊ
-        </div>
-
-        {/* Title Text */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ 
-            color: '#fff', fontSize: '14px', fontWeight: 'bold', letterSpacing: '2px', lineHeight: '1.2' 
-          }}>
-            AMHARIC NEURAL RECOGNITION
-          </div>
-          <div style={{ 
-            color: 'rgba(255,255,255,0.4)', fontSize: '10px', letterSpacing: '1px' 
-          }}>
-            REAL-TIME OPTICAL CHARACTER DETECTION
-          </div>
-        </div>
       </div>
 
     </div>
-    
   );}
-
-   
 
 export default NetworkVisualizer;
