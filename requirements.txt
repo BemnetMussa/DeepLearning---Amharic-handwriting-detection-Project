@@ -1,7 +1,9 @@
-streamlit
 torch
 torchvision
 numpy
-opencv-python-headless
-streamlit-drawable-canvas
 Pillow
+opencv-python-headless
+fastapi
+uvicorn
+matplotlib
+plotly
